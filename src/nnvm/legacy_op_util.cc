@@ -292,6 +292,64 @@ std::vector<std::pair<int, int> > OpBackInplaceOption(const NodeAttrs& attrs) {
   return remap;
 }
 
+std::vector<nnvm::SchemeRequest> OpPropForwardAlignedSchemes(
+    const NodeAttrs& attrs,
+    const std::vector<TShape>& input_shapes,
+    const std::vector<TShape>& output_shapes) {
+  const ParsedOpProp& prop = nnvm::get<ParsedOpProp>(attrs.parsed);
+  const ForwardSchemeRequests& fwdreqs =
+    prop.ptr->ForwardAlignedSchemes(input_shapes, output_shapes);
+  std::vector<nnvm::SchemeRequest> reqs;
+  for (size_t i = 0; i < fwdreqs.size(); ++i) {
+    reqs.emplace_back(fwdreqs[i].in_data_schemes,
+                      fwdreqs[i].out_data_schemes);
+  }
+  return reqs;
+}
+
+std::vector<nnvm::SchemeRequest> OpPropBackwardAlignedSchemes(
+    const NodeAttrs& attrs,
+    const std::vector<TShape>& input_shapes,
+    const std::vector<TShape>& output_shapes) {
+  const ParsedOpProp& prop = nnvm::get<ParsedOpProp>(attrs.parsed);
+  // Split inputs into multiple vectors.
+  std::vector<TShape> out_grad_shapes(prop.ptr->NumVisibleOutputs());
+  std::vector<TShape> in_data_shapes(prop.ptr->ListArguments().size());
+  std::vector<TShape> out_data_shapes(prop.ptr->NumOutputs());
+  // Pointers to convert the one input array to multiple arrays with semantics.
+  std::vector<TShape*> ogs_ptr(out_grad_shapes.size());
+  for (size_t i = 0; i < out_grad_shapes.size(); ++i) {
+    ogs_ptr[i] = &out_grad_shapes[i];
+  }
+  std::vector<TShape*> ids_ptr(in_data_shapes.size());
+  for (size_t i = 0; i < in_data_shapes.size(); ++i) {
+    ids_ptr[i] = &in_data_shapes[i];
+  }
+  std::vector<TShape*> ods_ptr(out_data_shapes.size());
+  for (size_t i = 0; i < out_data_shapes.size(); ++i) {
+    ods_ptr[i] = &out_data_shapes[i];
+  }
+  std::vector<TShape*> arg_ptr = prop.ptr->BackwardInputs(
+      ogs_ptr, ids_ptr, ods_ptr);
+  for (size_t i = 0; i < input_shapes.size(); ++i) {
+    *arg_ptr[i] = input_shapes[i];
+  }
+  const BackwardSchemeRequests& bwdreqs =
+    prop.ptr->BackwardAlignedSchemes(
+        out_grad_shapes, in_data_shapes,
+        out_data_shapes, output_shapes);
+  std::vector<nnvm::SchemeRequest> reqs;
+  for (const BackwardSchemeRequest& breq : bwdreqs) {
+    // Convert back to one input array.
+    const std::vector<nnvm::Scheme>& input_schemes =
+      prop.ptr->BackwardInputs(breq.out_grad_schemes,
+                               breq.in_data_schemes,
+                               breq.out_data_schemes);
+    reqs.emplace_back(input_schemes, breq.in_grad_schemes);
+  }
+  return reqs;
+}
+
 // register the legacy operator properties under NNVM registry.
 void RegisterLegacyOpProp() {
   for (auto reg : dmlc::Registry<OperatorPropertyReg>::List()) {
@@ -300,10 +358,10 @@ void RegisterLegacyOpProp() {
     auto creator = reg->body;
     auto attr_parser = [creator](NodeAttrs* attrs) {
       if (attrs->parsed.empty()) {
-        ParsedOpProp op;
-        op.ptr.reset(creator());
-        op.Init(*attrs);
-        attrs->parsed = std::move(op);
+        ParsedOpProp op_prop;
+        op_prop.ptr.reset(creator());
+        op_prop.Init(*attrs);
+        attrs->parsed = std::move(op_prop);
       }
     };
     op.add_arguments(reg->arguments);
@@ -341,6 +399,10 @@ void RegisterLegacyOpProp() {
     back_op.set_attr<FResourceRequest>(
         "FResourceRequest", OpBackResourceRequest);
     back_op.set_attr<bool>("TIsLayerOpBackward", true);
+
+    // Partitioner register.
+    op.set_attr<nnvm::FAlignedSchemes>("FAlignedSchemes", OpPropForwardAlignedSchemes);
+    back_op.set_attr<nnvm::FAlignedSchemes>("FAlignedSchemes", OpPropBackwardAlignedSchemes);
   }
 }
 

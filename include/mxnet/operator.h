@@ -19,6 +19,8 @@
 #include "./base.h"
 #include "./resource.h"
 
+#include <nnvm/op_attr_types.h>
+
 namespace mxnet {
 /*! \brief operation request type to Forward and Backward */
 enum OpReqType {
@@ -61,6 +63,22 @@ struct OpContext {
     return run_ctx.get_stream<xpu>();
   }
 };
+
+struct ForwardSchemeRequest {
+  std::vector<nnvm::Scheme> in_data_schemes;
+  std::vector<nnvm::Scheme> out_data_schemes;
+};
+
+typedef std::vector<ForwardSchemeRequest> ForwardSchemeRequests;
+
+struct BackwardSchemeRequest {
+  std::vector<nnvm::Scheme> out_grad_schemes;
+  std::vector<nnvm::Scheme> in_data_schemes;
+  std::vector<nnvm::Scheme> out_data_schemes;
+  std::vector<nnvm::Scheme> in_grad_schemes;
+};
+
+typedef std::vector<BackwardSchemeRequest> BackwardSchemeRequests;
 
 /*!
  * \brief Operator interface.
@@ -471,6 +489,36 @@ class OperatorProperty {
       ret[i] = all_data[ret_index[i]];
     }
     return ret;
+  }
+
+  // Partitioner that will only partition on the first dimension (batch dimension).
+  // It will generate N independent operators that works on different cuts of data.
+  virtual ForwardSchemeRequests
+  ForwardAlignedSchemes(const std::vector<TShape>& in_data_shapes,
+                        const std::vector<TShape>& out_data_shapes) const {
+    using nnvm::Scheme;
+    ForwardSchemeRequest req;
+    Scheme batch_cut = Scheme::Cut(0);
+    req.in_data_schemes.resize(in_data_shapes.size(), batch_cut);
+    req.out_data_schemes.resize(out_data_shapes.size(), batch_cut);
+    return {req};
+  }
+
+  // Partitioner that will only partition on the first dimension (batch dimension).
+  // It will generate N independent operators that works on different cuts of data.
+  virtual BackwardSchemeRequests
+  BackwardAlignedSchemes(const std::vector<TShape>& out_grad_shapes,
+                         const std::vector<TShape>& in_data_shapes,
+                         const std::vector<TShape>& out_data_shapes,
+                         const std::vector<TShape>& in_grad_shapes) const {
+    using nnvm::Scheme;
+    BackwardSchemeRequest req;
+    Scheme batch_cut = Scheme::Cut(0);
+    req.out_grad_schemes.resize(out_grad_shapes.size(), batch_cut);
+    req.in_data_schemes.resize(in_data_shapes.size(), batch_cut);
+    req.out_data_schemes.resize(out_data_shapes.size(), batch_cut);
+    req.in_grad_schemes.resize(in_grad_shapes.size(), batch_cut);
+    return {req};
   }
   /*!
    * \brief create OperatorProperty

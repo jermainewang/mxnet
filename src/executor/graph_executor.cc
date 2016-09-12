@@ -160,9 +160,7 @@ nnvm::Graph GraphExecutor::InitFullGraph(
   nnvm::Graph g_grad = nnvm::pass::Gradient(
       g, symbol.outputs, xs, head_grad_entry_,
       AggregateGradient, need_mirror);
-  CHECK_EQ(g_grad.outputs.size(), xs.size());
-  g.outputs.insert(g.outputs.end(), g_grad.outputs.begin(), g_grad.outputs.end());
-  return g;
+  return g_grad;
 }
 
 // pass to assign context to the graph
