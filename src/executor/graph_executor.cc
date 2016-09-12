@@ -112,6 +112,11 @@ nnvm::Graph GraphExecutor::InitFullGraph(
     const std::vector<NDArray>& arg_grad_store) {
   using nnvm::NodePtr;
   using nnvm::NodeEntry;
+  LOG(INFO) << "len(grad_req_type) = " << grad_req_type.size();
+  LOG(INFO) << "len(arg_grad_store) = " << arg_grad_store.size();
+  for (const auto& ag : arg_grad_store) {
+    LOG(INFO) << "Arg grad store shape: " << ag.shape();
+  }
   // initial information
   num_forward_outputs_ = symbol.outputs.size();
   num_forward_inputs_ = symbol.ListInputs(nnvm::Symbol::kAll).size();
@@ -331,6 +336,8 @@ Graph GraphExecutor::InitGraph(nnvm::Symbol symbol,
   g = nnvm::pass::InferShape(g, arg_shapes, "__shape__");
   g = nnvm::pass::InferType(g, arg_types);
   g = nnvm::ApplyPass(g, "PlanMemory");
+  g = nnvm::ApplyPass(g, "PrintPass");
+  g = nnvm::ApplyPass(g, "PartitionPass");
   return g;
 }
 
