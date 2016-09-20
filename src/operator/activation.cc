@@ -42,8 +42,12 @@ ActivationProp::ForwardAlignedSchemes(
   ForwardSchemeRequests reqs;
   for (size_t i = 0; i < ndim; ++i) {
     ForwardSchemeRequest req;
-    req.in_data_schemes.push_back(Scheme::Cut(i));
-    req.out_data_schemes.push_back(Scheme::Cut(i));
+    for (size_t j = 0; j < in_data_shapes.size(); ++j) {
+      req.in_data_schemes.push_back(Scheme::Cut(i));
+    }
+    for (size_t j = 0; j < out_data_shapes.size(); ++j) {
+      req.out_data_schemes.push_back(Scheme::Cut(i));
+    }
     reqs.push_back(req);
   }
   return reqs;
@@ -60,15 +64,18 @@ ActivationProp::BackwardAlignedSchemes(
   BackwardSchemeRequests reqs;
   for (size_t i = 0; i < ndim; ++i) {
     BackwardSchemeRequest req;
-#if MXNET_USE_CUDNN == 1
-    req.in_data_schemes.push_back(Scheme::Cut(i));
-    req.out_data_schemes.push_back(Scheme::Cut(i));
-    req.out_grad_schemes.push_back(Scheme::Cut(i));
-#else
-    req.out_data_schemes.push_back(Scheme::Cut(i));
-    req.out_grad_schemes.push_back(Scheme::Cut(i));
-#endif  // MXNET_USE_CUDNN
-    req.in_grad_schemes.push_back(Scheme::Cut(i));
+    for (size_t j = 0; j < out_grad_shapes.size(); ++j) {
+      req.out_grad_schemes.push_back(Scheme::Cut(i));
+    }
+    for (size_t j = 0; j < in_data_shapes.size(); ++j) {
+      req.in_data_schemes.push_back(Scheme::Cut(i));
+    }
+    for (size_t j = 0; j < out_data_shapes.size(); ++j) {
+      req.out_data_schemes.push_back(Scheme::Cut(i));
+    }
+    for (size_t j = 0; j < in_grad_shapes.size(); ++j) {
+      req.in_grad_schemes.push_back(Scheme::Cut(i));
+    }
     reqs.push_back(req);
   }
   return reqs;

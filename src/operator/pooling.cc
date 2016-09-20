@@ -40,6 +40,54 @@ Operator* PoolingProp::CreateOperatorEx(Context ctx, std::vector<TShape> *in_sha
   DO_BIND_DISPATCH(CreateOp, param_, (*in_type)[0]);
 }
 
+ForwardSchemeRequests
+PoolingProp::ForwardAlignedSchemes(
+    const std::vector<TShape>& in_data_shapes,
+    const std::vector<TShape>& out_data_shapes) const {
+  using nnvm::Scheme;
+  ForwardSchemeRequests reqs;
+  // Pooling only allows partition on the first two dimensions (batch & channel).
+  for (size_t i = 0; i < 2; ++i) {
+    ForwardSchemeRequest req;
+    for (size_t j = 0; j < in_data_shapes.size(); ++j) {
+      req.in_data_schemes.push_back(Scheme::Cut(i));
+    }
+    for (size_t j = 0; j < out_data_shapes.size(); ++j) {
+      req.out_data_schemes.push_back(Scheme::Cut(i));
+    }
+    reqs.push_back(req);
+  }
+  return reqs;
+}
+
+BackwardSchemeRequests
+PoolingProp::BackwardAlignedSchemes(
+    const std::vector<TShape>& out_grad_shapes,
+    const std::vector<TShape>& in_data_shapes,
+    const std::vector<TShape>& out_data_shapes,
+    const std::vector<TShape>& in_grad_shapes) const {
+  using nnvm::Scheme;
+  BackwardSchemeRequests reqs;
+  // Pooling only allows partition on the first two dimensions (batch & channel).
+  for (size_t i = 0; i < 2; ++i) {
+    BackwardSchemeRequest req;
+    for (size_t j = 0; j < out_grad_shapes.size(); ++j) {
+      req.out_grad_schemes.push_back(Scheme::Cut(i));
+    }
+    for (size_t j = 0; j < in_data_shapes.size(); ++j) {
+      req.in_data_schemes.push_back(Scheme::Cut(i));
+    }
+    for (size_t j = 0; j < out_data_shapes.size(); ++j) {
+      req.out_data_schemes.push_back(Scheme::Cut(i));
+    }
+    for (size_t j = 0; j < in_grad_shapes.size(); ++j) {
+      req.in_grad_schemes.push_back(Scheme::Cut(i));
+    }
+    reqs.push_back(req);
+  }
+  return reqs;
+}
+
 DMLC_REGISTER_PARAMETER(PoolingParam);
 
 MXNET_REGISTER_OP_PROPERTY(Pooling, PoolingProp)

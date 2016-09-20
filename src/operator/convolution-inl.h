@@ -477,6 +477,15 @@ class ConvolutionProp : public OperatorProperty {
   Operator* CreateOperatorEx(Context ctx, std::vector<TShape> *in_shape,
                              std::vector<int> *in_type) const override;
 
+  ForwardSchemeRequests
+  ForwardAlignedSchemes(const std::vector<TShape>& in_data_shapes,
+                        const std::vector<TShape>& out_data_shapes) const override;
+
+  BackwardSchemeRequests
+  BackwardAlignedSchemes(const std::vector<TShape>& out_grad_shapes,
+                         const std::vector<TShape>& in_data_shapes,
+                         const std::vector<TShape>& out_data_shapes,
+                         const std::vector<TShape>& in_grad_shapes) const override;
  private:
   ConvolutionParam param_;
 };  // class ConvolutionProp

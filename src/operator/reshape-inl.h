@@ -383,6 +383,17 @@ class FlattenProp : public ReshapeProp {
     auto ptr = new FlattenProp();
     return ptr;
   }
+
+  ForwardSchemeRequests
+  ForwardAlignedSchemes(const std::vector<TShape>& in_data_shapes,
+                        const std::vector<TShape>& out_data_shapes) const override;
+
+  BackwardSchemeRequests
+  BackwardAlignedSchemes(const std::vector<TShape>& out_grad_shapes,
+                         const std::vector<TShape>& in_data_shapes,
+                         const std::vector<TShape>& out_data_shapes,
+                         const std::vector<TShape>& in_grad_shapes) const override;
+
 };  // class FlattenProp
 #endif  // DMLC_USE_CXX11
 
