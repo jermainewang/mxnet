@@ -33,6 +33,47 @@ Operator *CreateOp<cpu>(ActivationParam param, int dtype) {
   return op;
 }
 
+ForwardSchemeRequests
+ActivationProp::ForwardAlignedSchemes(
+    const std::vector<TShape>& in_data_shapes,
+    const std::vector<TShape>& out_data_shapes) const {
+  using nnvm::Scheme;
+  size_t ndim = in_data_shapes[activation::kData].ndim();
+  ForwardSchemeRequests reqs;
+  for (size_t i = 0; i < ndim; ++i) {
+    ForwardSchemeRequest req;
+    req.in_data_schemes.push_back(Scheme::Cut(i));
+    req.out_data_schemes.push_back(Scheme::Cut(i));
+    reqs.push_back(req);
+  }
+  return reqs;
+}
+
+BackwardSchemeRequests
+ActivationProp::BackwardAlignedSchemes(
+    const std::vector<TShape>& out_grad_shapes,
+    const std::vector<TShape>& in_data_shapes,
+    const std::vector<TShape>& out_data_shapes,
+    const std::vector<TShape>& in_grad_shapes) const {
+  using nnvm::Scheme;
+  size_t ndim = out_grad_shapes[activation::kOut].ndim();
+  BackwardSchemeRequests reqs;
+  for (size_t i = 0; i < ndim; ++i) {
+    BackwardSchemeRequest req;
+#if MXNET_USE_CUDNN == 1
+    req.in_data_schemes.push_back(Scheme::Cut(i));
+    req.out_data_schemes.push_back(Scheme::Cut(i));
+    req.out_grad_schemes.push_back(Scheme::Cut(i));
+#else
+    req.out_data_schemes.push_back(Scheme::Cut(i));
+    req.out_grad_schemes.push_back(Scheme::Cut(i));
+#endif  // MXNET_USE_CUDNN
+    req.in_grad_schemes.push_back(Scheme::Cut(i));
+    reqs.push_back(req);
+  }
+  return reqs;
+}
+
 // DO_BIND_DISPATCH comes from operator_common.h
 Operator *ActivationProp::CreateOperatorEx(Context ctx, std::vector<TShape> *in_shape,
                                      std::vector<int> *in_type) const {

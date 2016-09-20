@@ -112,11 +112,6 @@ nnvm::Graph GraphExecutor::InitFullGraph(
     const std::vector<NDArray>& arg_grad_store) {
   using nnvm::NodePtr;
   using nnvm::NodeEntry;
-  LOG(INFO) << "len(grad_req_type) = " << grad_req_type.size();
-  LOG(INFO) << "len(arg_grad_store) = " << arg_grad_store.size();
-  for (const auto& ag : arg_grad_store) {
-    LOG(INFO) << "Arg grad store shape: " << ag.shape();
-  }
   // initial information
   num_forward_outputs_ = symbol.outputs.size();
   num_forward_inputs_ = symbol.ListInputs(nnvm::Symbol::kAll).size();

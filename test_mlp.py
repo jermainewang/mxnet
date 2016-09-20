@@ -8,19 +8,22 @@ import pickle as pickle
 import logging
 
 # symbol net
-batch_size = 64
-hidden_size = 128
+batch_size = 128
+hidden_size = 32
 input_size = hidden_size
 out_size = hidden_size
 net = mx.symbol.Variable('data')
-net = mx.symbol.FullyConnected(net, name='fc1', num_hidden=hidden_size, no_bias=True)
-#net = mx.symbol.Activation(net, name='relu1', act_type="relu")
-net = mx.symbol.FullyConnected(net, name = 'fc2', num_hidden=hidden_size, no_bias=True)
-#net = mx.symbol.Activation(net, name='relu2', act_type="relu")
-net = mx.symbol.FullyConnected(net, name='fc3', num_hidden=hidden_size, no_bias=True)
-net = mx.symbol.FullyConnected(net, name='fc4', num_hidden=hidden_size, no_bias=True)
-net = mx.symbol.FullyConnected(net, name='fc5', num_hidden=hidden_size, no_bias=True)
-net = mx.symbol.FullyConnected(net, name='fc6', num_hidden=hidden_size, no_bias=True)
+net = mx.symbol.FullyConnected(net, name='fc1', num_hidden=hidden_size)
+net = mx.symbol.Activation(net, name='relu1', act_type="relu")
+net = mx.symbol.FullyConnected(net, name = 'fc2', num_hidden=hidden_size)
+net = mx.symbol.Activation(net, name='relu2', act_type="relu")
+net = mx.symbol.FullyConnected(net, name='fc3', num_hidden=hidden_size)
+net = mx.symbol.Activation(net, name='relu3', act_type="relu")
+net = mx.symbol.FullyConnected(net, name='fc4', num_hidden=hidden_size)
+net = mx.symbol.Activation(net, name='relu4', act_type="relu")
+net = mx.symbol.FullyConnected(net, name='fc5', num_hidden=hidden_size)
+net = mx.symbol.Activation(net, name='relu5', act_type="relu")
+net = mx.symbol.FullyConnected(net, name='fc6', num_hidden=hidden_size)
 
 def test_mlp():
     # print logging by default
