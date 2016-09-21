@@ -3,13 +3,12 @@
  * \file legacy_op_util.cc
  * \brief Utility to adapt OpProperty to the new NNVM registery
  */
-#include <dmlc/base.h>
-#include <mxnet/base.h>
-#include <mxnet/operator.h>
 #include <mxnet/op_attr_types.h>
 #include <mxnet/ndarray.h>
 #include <nnvm/node.h>
 #include <memory>
+
+#include "./legacy_op_util.h"
 
 namespace mxnet {
 namespace op {
@@ -19,28 +18,6 @@ using nnvm::Node;
 using nnvm::NodePtr;
 using nnvm::NodeAttrs;
 using nnvm::NodeEntry;
-
-class ParsedOpProp {
- public:
-  std::shared_ptr<OperatorProperty> ptr;
-  std::vector<std::string> arguments;
-  std::vector<std::string> aux_states;
-  std::vector<std::string> inputs;
-  std::vector<std::string> outputs;
-  // initializer
-  void Init(const NodeAttrs& attrs) {
-    std::vector<std::pair<std::string, std::string> > kwargs(
-        attrs.dict.begin(), attrs.dict.end());
-    ptr->Init(kwargs);
-    arguments = ptr->ListArguments();
-    aux_states = ptr->ListAuxiliaryStates();
-    outputs = ptr->ListOutputs();
-    inputs = arguments;
-    inputs.insert(
-        inputs.end(), aux_states.begin(), aux_states.end());
-  }
-};
-
 
 // function to use operator property to infer attr
 // get op property from the attribute
@@ -292,64 +269,6 @@ std::vector<std::pair<int, int> > OpBackInplaceOption(const NodeAttrs& attrs) {
   return remap;
 }
 
-std::vector<nnvm::SchemeRequest> OpPropForwardAlignedSchemes(
-    const NodeAttrs& attrs,
-    const std::vector<TShape>& input_shapes,
-    const std::vector<TShape>& output_shapes) {
-  const ParsedOpProp& prop = nnvm::get<ParsedOpProp>(attrs.parsed);
-  const ForwardSchemeRequests& fwdreqs =
-    prop.ptr->ForwardAlignedSchemes(input_shapes, output_shapes);
-  std::vector<nnvm::SchemeRequest> reqs;
-  for (size_t i = 0; i < fwdreqs.size(); ++i) {
-    reqs.emplace_back(fwdreqs[i].in_data_schemes,
-                      fwdreqs[i].out_data_schemes);
-  }
-  return reqs;
-}
-
-std::vector<nnvm::SchemeRequest> OpPropBackwardAlignedSchemes(
-    const NodeAttrs& attrs,
-    const std::vector<TShape>& input_shapes,
-    const std::vector<TShape>& output_shapes) {
-  const ParsedOpProp& prop = nnvm::get<ParsedOpProp>(attrs.parsed);
-  // Split inputs into multiple vectors.
-  std::vector<TShape> out_grad_shapes(prop.ptr->NumVisibleOutputs());
-  std::vector<TShape> in_data_shapes(prop.ptr->ListArguments().size());
-  std::vector<TShape> out_data_shapes(prop.ptr->NumOutputs());
-  // Pointers to convert the one input array to multiple arrays with semantics.
-  std::vector<TShape*> ogs_ptr(out_grad_shapes.size());
-  for (size_t i = 0; i < out_grad_shapes.size(); ++i) {
-    ogs_ptr[i] = &out_grad_shapes[i];
-  }
-  std::vector<TShape*> ids_ptr(in_data_shapes.size());
-  for (size_t i = 0; i < in_data_shapes.size(); ++i) {
-    ids_ptr[i] = &in_data_shapes[i];
-  }
-  std::vector<TShape*> ods_ptr(out_data_shapes.size());
-  for (size_t i = 0; i < out_data_shapes.size(); ++i) {
-    ods_ptr[i] = &out_data_shapes[i];
-  }
-  std::vector<TShape*> arg_ptr = prop.ptr->BackwardInputs(
-      ogs_ptr, ids_ptr, ods_ptr);
-  for (size_t i = 0; i < input_shapes.size(); ++i) {
-    *arg_ptr[i] = input_shapes[i];
-  }
-  const BackwardSchemeRequests& bwdreqs =
-    prop.ptr->BackwardAlignedSchemes(
-        out_grad_shapes, in_data_shapes,
-        out_data_shapes, output_shapes);
-  std::vector<nnvm::SchemeRequest> reqs;
-  for (const BackwardSchemeRequest& breq : bwdreqs) {
-    // Convert back to one input array.
-    const std::vector<nnvm::Scheme>& input_schemes =
-      prop.ptr->BackwardInputs(breq.out_grad_schemes,
-                               breq.in_data_schemes,
-                               breq.out_data_schemes);
-    reqs.emplace_back(input_schemes, breq.in_grad_schemes);
-  }
-  return reqs;
-}
-
 // register the legacy operator properties under NNVM registry.
 void RegisterLegacyOpProp() {
   for (auto reg : dmlc::Registry<OperatorPropertyReg>::List()) {
@@ -401,8 +320,7 @@ void RegisterLegacyOpProp() {
     back_op.set_attr<bool>("TIsLayerOpBackward", true);
 
     // Partitioner register.
-    op.set_attr<nnvm::FAlignedSchemes>("FAlignedSchemes", OpPropForwardAlignedSchemes);
-    back_op.set_attr<nnvm::FAlignedSchemes>("FAlignedSchemes", OpPropBackwardAlignedSchemes);
+    RegisterOpAlignedSchemes();
   }
 }
 
