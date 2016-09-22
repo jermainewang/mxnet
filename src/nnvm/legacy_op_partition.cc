@@ -412,6 +412,7 @@ void RegisterOpAlignedSchemes() {
   // TODO
   for (const string& name : dmlc::Registry<::nnvm::Op>::ListAllNames()) {
     Op& op = dmlc::Registry<::nnvm::Op>::Get()->__REGISTER_OR_GET__(name);
+    cout << op.name << endl;
     if (Op::GetAttr<AType>(kAttrName).count(&op) > 0) {
       // Already registered.
       continue;
@@ -421,7 +422,23 @@ void RegisterOpAlignedSchemes() {
     } else if (name == "_backward_FullyConnected" || name == "_backward_Convolution") {
       op.set_attr<AType>(kAttrName, OpBackwardAlignedSchemes);
     } else if (name == "Activation" || name == "_backward_Activation"
-        || name == "Dropout" || name == "_backward_Dropout") {
+        || name == "Dropout" || name == "_backward_Dropout"
+        || name == "LeakyReLU" || name == "_backward_LeadkyReLU"
+        || name == "ElementWiseSum"
+        || name == "_plus" || name == "_plus_scalar"
+        || name == "_backward_plus" || name == "_backward_plus_scalar"
+        || name == "_minus" || name == "_minus_scalar"
+        || name == "_backward_minus" || name == "_backward_minus_scalar"
+        || name == "_mul" || name == "_mul_scalar"
+        || name == "_backward_mul" || name == "_backward_mul_scalar"
+        || name == "_div" || name == "_div_scalar"
+        || name == "_backward_div" || name == "_backward_div_scalar"
+        || name == "_maximum" || name == "_maximum_scalar"
+        || name == "_backward_maximum" || name == "_backward_maximum_scalar"
+        || name == "_minimum" || name == "_minimum_scalar"
+        || name == "_backward_minimum" || name == "_backward_minimum_scalar"
+        || name == "_power" || name == "_power_scalar"
+        || name == "_backward_power" || name == "_backward_power_scalar") {
       op.set_attr<AType>(kAttrName, CutAllDimsSchemes);
     } else if (name == "Pooling" || name == "_backward_Pooling"
         || name == "Flatten" || name == "_backward_Flatten") {
