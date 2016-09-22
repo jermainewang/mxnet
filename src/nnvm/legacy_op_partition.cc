@@ -52,38 +52,9 @@ BackwardSchemeRequests BackwardAlignedSchemes(
 }
 
 ///////////////////////////////////////////////////////////////////////////
-
-// Partitioner that will only partition on the first dimension (batch dimension).
-// It will generate N independent operators that works on different cuts of data.
-ForwardSchemeRequests BatchForwardSchemes(
-    const std::vector<TShape>& in_data_shapes,
-    const std::vector<TShape>& out_data_shapes) {
-  ForwardSchemeRequest req;
-  Scheme batch_cut = Scheme::Cut(0);
-  req.in_data_schemes.resize(in_data_shapes.size(), batch_cut);
-  req.out_data_schemes.resize(out_data_shapes.size(), batch_cut);
-  return {req};
-}
-
-// Partitioner that will only partition on the first dimension (batch dimension).
-// It will generate N independent operators that works on different cuts of data.
-BackwardSchemeRequests BatchBackwardSchemes(
-    const std::vector<TShape>& out_grad_shapes,
-    const std::vector<TShape>& in_data_shapes,
-    const std::vector<TShape>& out_data_shapes,
-    const std::vector<TShape>& in_grad_shapes) {
-  BackwardSchemeRequest req;
-  Scheme batch_cut = Scheme::Cut(0);
-  req.out_grad_schemes.resize(out_grad_shapes.size(), batch_cut);
-  req.in_data_schemes.resize(in_data_shapes.size(), batch_cut);
-  req.out_data_schemes.resize(out_data_shapes.size(), batch_cut);
-  req.in_grad_schemes.resize(in_grad_shapes.size(), batch_cut);
-  return {req};
-}
-
 template<size_t K>
 vector<SchemeRequest> CutFirstKDimsSchemes(
-    const NodeAttrs& attrs,
+    const NodeAttrs&,
     const std::vector<TShape>& input_shapes,
     const std::vector<TShape>& output_shapes) {
   vector<SchemeRequest> reqs;
@@ -102,9 +73,30 @@ vector<SchemeRequest> CutFirstKDimsSchemes(
   return reqs;
 }
 
+vector<SchemeRequest> CutAllDimsSchemes(
+    const NodeAttrs&,
+    const std::vector<TShape>& input_shapes,
+    const std::vector<TShape>& output_shapes) {
+  vector<SchemeRequest> reqs;
+  CHECK_GT(input_shapes.size(), 0);
+  for (size_t i = 0; i < input_shapes[0].ndim(); ++i) {
+    SchemeRequest req;
+    for (size_t j = 0; j < input_shapes.size(); ++j) {
+      CHECK_LT(i, input_shapes[j].ndim());
+      req.input_schemes.push_back(Scheme::Cut(i));
+    }
+    for (size_t j = 0; j < output_shapes.size(); ++j) {
+      CHECK_LT(i, output_shapes[j].ndim());
+      req.output_schemes.push_back(Scheme::Cut(i));
+    }
+    reqs.push_back(req);
+  }
+  return reqs;
+}
+
 ///////////////////////////////////////////////////////////////////////////////////
 template<>
-ForwardSchemeRequests ForwardAlignedSchemes(
+ForwardSchemeRequests ForwardAlignedSchemes<FullyConnectedParam>(
     const FullyConnectedParam& param,
     const std::vector<TShape>& in_data_shapes,
     const std::vector<TShape>& out_data_shapes) {
@@ -149,7 +141,7 @@ ForwardSchemeRequests ForwardAlignedSchemes(
 }
 
 template<>
-BackwardSchemeRequests BackwardAlignedSchemes(
+BackwardSchemeRequests BackwardAlignedSchemes<FullyConnectedParam>(
     const FullyConnectedParam& param,
     const std::vector<TShape>& out_grad_shapes,
     const std::vector<TShape>& in_data_shapes,
@@ -205,7 +197,7 @@ BackwardSchemeRequests BackwardAlignedSchemes(
 }
 
 template<>
-ForwardSchemeRequests ForwardAlignedSchemes(
+ForwardSchemeRequests ForwardAlignedSchemes<ConvolutionParam>(
     const ConvolutionParam& param,
     const std::vector<TShape>& in_data_shapes,
     const std::vector<TShape>& out_data_shapes) {
@@ -251,7 +243,7 @@ ForwardSchemeRequests ForwardAlignedSchemes(
 }
 
 template<>
-BackwardSchemeRequests BackwardAlignedSchemes(
+BackwardSchemeRequests BackwardAlignedSchemes<ConvolutionParam>(
     const ConvolutionParam& param,
     const std::vector<TShape>& out_grad_shapes,
     const std::vector<TShape>& in_data_shapes,
@@ -320,6 +312,10 @@ ForwardSchemeRequests ForwardAlignedSchemesCaller(
     FullyConnectedParam param;
     param.Init(kwargs);
     return ForwardAlignedSchemes<FullyConnectedParam>(param, input_shapes, output_shapes);
+  } else if (attrs.op->name == "Convolution") {
+    ConvolutionParam param;
+    param.Init(kwargs);
+    return ForwardAlignedSchemes<ConvolutionParam>(param, input_shapes, output_shapes);
   } else {
     LOG(FATAL) << "No aligned scheme defined for operator: " << attrs.op->name;
     return ForwardSchemeRequests();
@@ -338,6 +334,12 @@ BackwardSchemeRequests BackwardAlignedSchemesCaller(
     FullyConnectedParam param;
     param.Init(kwargs);
     return BackwardAlignedSchemes<FullyConnectedParam>(
+        param, out_grad_shapes, in_data_shapes,
+        out_data_shapes, in_grad_shapes);
+  } else if (attrs.op->name == "_backward_Convolution") {
+    ConvolutionParam param;
+    param.Init(kwargs);
+    return BackwardAlignedSchemes<ConvolutionParam>(
         param, out_grad_shapes, in_data_shapes,
         out_data_shapes, in_grad_shapes);
   } else {
@@ -404,12 +406,29 @@ std::vector<SchemeRequest> OpBackwardAlignedSchemes(
 }
 
 void RegisterOpAlignedSchemes() {
+  using namespace nnvm::pass;
+  const string kAttrName = "FAlignedSchemes";
+  using AType = nnvm::pass::FAlignedSchemes;
   // TODO
-  for (auto reg : dmlc::Registry<OperatorPropertyReg>::List()) {
-    Op& op = ::dmlc::Registry<::nnvm::Op>::Get()->__REGISTER_OR_GET__(reg->name);
+  for (const string& name : dmlc::Registry<::nnvm::Op>::ListAllNames()) {
+    Op& op = dmlc::Registry<::nnvm::Op>::Get()->__REGISTER_OR_GET__(name);
+    if (Op::GetAttr<AType>(kAttrName).count(&op) > 0) {
+      // Already registered.
+      continue;
+    }
+    if (name == "FullyConnected" || name == "Convolution") {
+      op.set_attr<AType>(kAttrName, OpForwardAlignedSchemes);
+    } else if (name == "_backward_FullyConnected" || name == "_backward_Convolution") {
+      op.set_attr<AType>(kAttrName, OpBackwardAlignedSchemes);
+    } else if (name == "Activation" || name == "_backward_Activation"
+        || name == "Dropout" || name == "_backward_Dropout") {
+      op.set_attr<AType>(kAttrName, CutAllDimsSchemes);
+    } else if (name == "Pooling" || name == "_backward_Pooling"
+        || name == "Flatten" || name == "_backward_Flatten") {
+      op.set_attr<AType>(kAttrName, CutFirstKDimsSchemes<2>);
+    }
   }
-    //op.set_attr<nnvm::FAlignedSchemes>("FAlignedSchemes", OpPropForwardAlignedSchemes);
-    //back_op.set_attr<nnvm::FAlignedSchemes>("FAlignedSchemes", OpPropBackwardAlignedSchemes);
+  LOG(INFO) << "Map size: " << Op::GetAttr<AType>(kAttrName).size();
 }
 
 }  // namespace op

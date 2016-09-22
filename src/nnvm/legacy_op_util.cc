@@ -270,6 +270,8 @@ std::vector<std::pair<int, int> > OpBackInplaceOption(const NodeAttrs& attrs) {
 }
 
 // register the legacy operator properties under NNVM registry.
+// ATTENTION: This function could be called several times. Please make sure the results
+// are the same.
 void RegisterLegacyOpProp() {
   for (auto reg : dmlc::Registry<OperatorPropertyReg>::List()) {
     Op& op = ::dmlc::Registry<::nnvm::Op>::Get()->__REGISTER_OR_GET__(reg->name);
@@ -319,9 +321,9 @@ void RegisterLegacyOpProp() {
         "FResourceRequest", OpBackResourceRequest);
     back_op.set_attr<bool>("TIsLayerOpBackward", true);
 
-    // Partitioner register.
-    RegisterOpAlignedSchemes();
   }
+  // Partitioner register.
+  RegisterOpAlignedSchemes();
 }
 
 // no gradient operator
