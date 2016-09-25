@@ -1,5 +1,7 @@
 #include "./legacy_op_partition.h"
 
+#include <sstream>
+
 #include <dmlc/base.h>
 #include <mxnet/base.h>
 #include <nnvm/scheme.h>
@@ -14,49 +16,185 @@ using nnvm::pass::SchemeRequest;
 
 namespace mxnet {
 namespace op {
+namespace {
+// Split inputs into multiple vectors.
+template<typename T>
+void SplitBackwardInputs(const NodeAttrs& attrs,
+                         const vector<T>& inputs,
+                         vector<T>* out_grad,
+                         vector<T>* in_data,
+                         vector<T>* out_data) {
+  const ParsedOpProp& prop = nnvm::get<ParsedOpProp>(attrs.parsed);
+  out_grad->resize(prop.ptr->NumVisibleOutputs());
+  in_data->resize(prop.ptr->ListArguments().size());
+  out_data->resize(prop.ptr->NumOutputs());
+  // Pointers to convert the one input array to multiple arrays with semantics.
+  vector<T*> ogs_ptr(out_grad->size());
+  for (size_t i = 0; i < out_grad->size(); ++i) {
+    ogs_ptr[i] = &(*out_grad)[i];
+  }
+  vector<T*> ids_ptr(in_data->size());
+  for (size_t i = 0; i < in_data->size(); ++i) {
+    ids_ptr[i] = &(*in_data)[i];
+  }
+  vector<T*> ods_ptr(out_data->size());
+  for (size_t i = 0; i < out_data->size(); ++i) {
+    ods_ptr[i] = &(*out_data)[i];
+  }
+  vector<T*> arg_ptr = prop.ptr->BackwardInputs(
+      ogs_ptr, ids_ptr, ods_ptr);
+  CHECK_EQ(arg_ptr.size(), inputs.size());
+  for (size_t i = 0; i < inputs.size(); ++i) {
+    *arg_ptr[i] = inputs[i];
+  }
+}
+}  // namespace
 
-struct ForwardSchemeRequest {
-  std::vector<Scheme> in_data_schemes;
-  std::vector<Scheme> out_data_schemes;
+/*struct ForwardSchemeRequest {
+  vector<Scheme> in_data_schemes;
+  vector<Scheme> out_data_schemes;
 };
 
-typedef std::vector<ForwardSchemeRequest> ForwardSchemeRequests;
+typedef vector<ForwardSchemeRequest> ForwardSchemeRequests;
 
 struct BackwardSchemeRequest {
-  std::vector<Scheme> out_grad_schemes;
-  std::vector<Scheme> in_data_schemes;
-  std::vector<Scheme> out_data_schemes;
-  std::vector<Scheme> in_grad_schemes;
+  vector<Scheme> out_grad_schemes;
+  vector<Scheme> in_data_schemes;
+  vector<Scheme> out_data_schemes;
+  vector<Scheme> in_grad_schemes;
 };
 
-typedef std::vector<BackwardSchemeRequest> BackwardSchemeRequests;
+typedef vector<BackwardSchemeRequest> BackwardSchemeRequests;*/
+
+class OpPartitioner {
+ public:
+  OpPartitioner(const NodeAttrs& attrs): attrs_(attrs) {}
+  virtual void AttrsAlignedScheme(
+      const vector<TShape>& input_shapes,
+      const vector<TShape>& output_shapes,
+      const vector<Scheme*>& input_schemes,
+      const vector<Scheme*>& output_schemes) = 0;
+  virtual vector<NodeAttrs> AttrsPartition(size_t num_partitions) = 0;
+ protected:
+  const NodeAttrs& attrs_;
+};
 
 template<typename ParamType>
-ForwardSchemeRequests ForwardAlignedSchemes(
-    const ParamType& param,
-    const std::vector<TShape>& in_data_shapes,
-    const std::vector<TShape>& out_data_shapes) {
-  LOG(FATAL) << "Not implemented";
-  return ForwardSchemeRequests();
-}
+class ForwardOpPartitioner : public OpPartitioner {
+ public:
+  ForwardOpPartitioner(const NodeAttrs& attrs): OpPartitioner(attrs) {
+    vector<pair<string, string> > kwargs(attrs_.dict.begin(), attrs_.dict.end());
+    param_.Init(kwargs);
+  }
+  virtual void AlignedScheme(
+      const ParamType& param,
+      const vector<TShape>& in_data_shapes,
+      const vector<TShape>& out_data_shapes,
+      const vector<Scheme*>& in_data_schemes,
+      const vector<Scheme*>& out_data_schemes) = 0;
+  virtual vector<ParamType> Partition(const ParamType&, size_t num_partitions) = 0;
+  void AttrsAlignedScheme(
+      const vector<TShape>& input_shapes,
+      const vector<TShape>& output_shapes,
+      const vector<Scheme*>& input_schemes,
+      const vector<Scheme*>& output_schemes) override {
+    this->AlignedScheme(param_,
+                        input_shapes,
+                        output_shapes,
+                        input_schemes,
+                        output_schemes);
+  }
+  vector<NodeAttrs> AttrsPartition(size_t num_partitions) override {
+    const vector<ParamType>& params = this->Partition(param_, num_partitions);
+    vector<NodeAttrs> ret;
+    CHECK_EQ(attrs_.scalars.size(), 0)
+      << "Cannot have positional attributes";
+    for (const ParamType& p : params) {
+      NodeAttrs a;
+      a.op = attrs_.op;
+      for (const auto kv : p.__DICT__()) {
+        a.dict[kv.first] = kv.second;
+      }
+      ret.push_back(a);
+    }
+    // TODO(minjie): how about `attrs_.parsed`?
+    return ret;
+  }
+ protected:
+  ParamType param_;
+};
 
 template<typename ParamType>
-BackwardSchemeRequests BackwardAlignedSchemes(
-    const ParamType& param,
-    const std::vector<TShape>& out_grad_shapes,
-    const std::vector<TShape>& in_data_shapes,
-    const std::vector<TShape>& out_data_shapes,
-    const std::vector<TShape>& in_grad_shapes) {
-  LOG(FATAL) << "Not implemented";
-  return BackwardSchemeRequests();
-}
+class BackwardOpPartitioner : public OpPartitioner {
+ public:
+  BackwardOpPartitioner(const NodeAttrs& attrs): OpPartitioner(attrs) {
+    vector<pair<string, string> > kwargs(attrs_.dict.begin(), attrs_.dict.end());
+    param_.Init(kwargs);
+  }
+  virtual void AlignedScheme(
+      const ParamType& param,
+      const vector<TShape>& out_grad_shapes,
+      const vector<TShape>& in_data_shapes,
+      const vector<TShape>& out_data_shapes,
+      const vector<TShape>& in_grad_shapes,
+      const vector<Scheme*>& out_grad_schemes,
+      const vector<Scheme*>& in_data_schemes,
+      const vector<Scheme*>& out_data_schemes,
+      const vector<Scheme*>& in_grad_schemes) = 0;
+  virtual vector<ParamType> Partition(const ParamType&, size_t num_partitions) = 0;
+  void AttrsAlignedScheme(
+      const vector<TShape>& input_shapes,
+      const vector<TShape>& output_shapes,
+      const vector<Scheme*>& input_schemes,
+      const vector<Scheme*>& output_schemes) override {
+    vector<TShape> out_grad_shapes, in_data_shapes, out_data_shapes;
+    vector<Scheme*> out_grad_schemes, in_data_schemes, out_data_schemes;
+    SplitBackwardInputs(attrs_,
+                        input_shapes,
+                        &out_grad_shapes,
+                        &in_data_shapes,
+                        &out_data_shapes);
+    SplitBackwardInputs(attrs_,
+                        input_schemes,
+                        &out_grad_schemes,
+                        &in_data_schemes,
+                        &out_data_schemes);
+    this->AlignedScheme(param_,
+                        out_grad_shapes,
+                        in_data_shapes,
+                        out_data_shapes,
+                        output_shapes,
+                        out_grad_schemes,
+                        in_data_schemes,
+                        out_data_schemes,
+                        output_schemes);
+  }
+  vector<NodeAttrs> AttrsPartition(size_t num_partitions) override {
+    const vector<ParamType>& params = this->Partition(param_, num_partitions);
+    vector<NodeAttrs> ret;
+    CHECK_EQ(attrs_.scalars.size(), 0)
+      << "Cannot have positional attributes";
+    for (const ParamType& p : params) {
+      NodeAttrs a;
+      a.op = attrs_.op;
+      for (const auto kv : p.__DICT__()) {
+        a.dict[kv.first] = kv.second;
+      }
+      ret.push_back(a);
+    }
+    // TODO(minjie): how about `attrs_.parsed`?
+    return ret;
+  }
+ protected:
+  ParamType param_;
+};
 
 ///////////////////////////////////////////////////////////////////////////
 template<size_t K>
 vector<SchemeRequest> CutFirstKDimsSchemes(
     const NodeAttrs&,
-    const std::vector<TShape>& input_shapes,
-    const std::vector<TShape>& output_shapes) {
+    const vector<TShape>& input_shapes,
+    const vector<TShape>& output_shapes) {
   vector<SchemeRequest> reqs;
   for (size_t i = 0; i < K; ++i) {
     SchemeRequest req;
@@ -75,8 +213,8 @@ vector<SchemeRequest> CutFirstKDimsSchemes(
 
 vector<SchemeRequest> CutAllDimsSchemes(
     const NodeAttrs&,
-    const std::vector<TShape>& input_shapes,
-    const std::vector<TShape>& output_shapes) {
+    const vector<TShape>& input_shapes,
+    const vector<TShape>& output_shapes) {
   vector<SchemeRequest> reqs;
   CHECK_GT(input_shapes.size(), 0);
   for (size_t i = 0; i < input_shapes[0].ndim(); ++i) {
@@ -94,322 +232,457 @@ vector<SchemeRequest> CutAllDimsSchemes(
   return reqs;
 }
 
+// Return node attributes that are exactly the same as the given one.
+vector<NodeAttrs> IdenticalPartition(const NodeAttrs& attrs,
+                                     size_t num_partitions) {
+  return vector<NodeAttrs>(num_partitions, attrs);
+}
+
 ///////////////////////////////////////////////////////////////////////////////////
-template<>
-ForwardSchemeRequests ForwardAlignedSchemes<FullyConnectedParam>(
-    const FullyConnectedParam& param,
-    const std::vector<TShape>& in_data_shapes,
-    const std::vector<TShape>& out_data_shapes) {
-  CHECK_EQ(in_data_shapes[fullc::kData].ndim(), 2);
-  CHECK_EQ(in_data_shapes[fullc::kWeight].ndim(), 2);
-  CHECK_EQ(out_data_shapes[fullc::kOut].ndim(), 2);
-  ForwardSchemeRequest req1, req2, req3;
-  // One matmult in the forward propagation:
-  //   - y = dot(x, w.T) + b
-  // Therefore, there are following aligned schemes:
-  //   - x: R, w: r, y: R, b: r
-  //   - x: r, w: R, y: C, b: R
-  //   - x: C, w: C, y: red, b: r
-  req1.in_data_schemes.resize(param.no_bias? 2: 3);
-  req1.out_data_schemes.resize(1);
-  req1.in_data_schemes[fullc::kData] = Scheme::Cut(0);  // x: R
-  req1.in_data_schemes[fullc::kWeight] = Scheme::Rep(); // w: r
-  req1.out_data_schemes[fullc::kOut] = Scheme::Cut(0);  // y: R
-  if (!param.no_bias) {
-    req1.in_data_schemes[fullc::kBias] = Scheme::Rep(); // b: r
+// FullyConnectedOp
+// One matmult in the forward propagation:
+//   - y = dot(x, w.T) + b
+// Therefore, there are following aligned schemes:
+//   - x: R, w: r, y: R, b: r
+//   - x: r, w: R, y: C, b: R
+//   - x: C, w: C, y: red, b: r
+class FCForwardPartitioner1 : public ForwardOpPartitioner<FullyConnectedParam> {
+ public:
+  FCForwardPartitioner1(const NodeAttrs& attrs):
+    ForwardOpPartitioner<FullyConnectedParam>(attrs) {}
+  void AlignedScheme(
+      const FullyConnectedParam& param,
+      const vector<TShape>& in_data_shapes,
+      const vector<TShape>& out_data_shapes,
+      const vector<Scheme*>& in_data_schemes,
+      const vector<Scheme*>& out_data_schemes) override {
+    CHECK_EQ(in_data_shapes[fullc::kData].ndim(), 2);
+    CHECK_EQ(in_data_shapes[fullc::kWeight].ndim(), 2);
+    CHECK_EQ(out_data_shapes[fullc::kOut].ndim(), 2);
+    if (param.no_bias) {
+      CHECK_EQ(in_data_shapes.size(), 2);
+    } else {
+      CHECK_EQ(in_data_shapes.size(), 3);
+    }
+    *in_data_schemes[fullc::kData] = Scheme::Cut(0);  // x: R
+    *in_data_schemes[fullc::kWeight] = Scheme::Rep(); // w: r
+    *out_data_schemes[fullc::kOut] = Scheme::Cut(0);  // y: R
+    if (!param.no_bias) {
+      *in_data_schemes[fullc::kBias] = Scheme::Rep(); // b: r
+    }
   }
-
-  req2.in_data_schemes.resize(param.no_bias? 2: 3);
-  req2.out_data_schemes.resize(1);
-  req2.in_data_schemes[fullc::kData] = Scheme::Rep();    // x: r
-  req2.in_data_schemes[fullc::kWeight] = Scheme::Cut(0); // w: R
-  req2.out_data_schemes[fullc::kOut] = Scheme::Cut(1);   // y: C
-  if (!param.no_bias) {
-    req2.in_data_schemes[fullc::kBias] = Scheme::Cut(0); // b: R
+  vector<FullyConnectedParam> Partition(
+      const FullyConnectedParam& param, size_t num_partitions) override {
+    // TODO
+    return vector<FullyConnectedParam>();
   }
-
-  req3.in_data_schemes.resize(param.no_bias? 2: 3);
-  req3.out_data_schemes.resize(1);
-  req3.in_data_schemes[fullc::kData] = Scheme::Cut(1);   // x: C
-  req3.in_data_schemes[fullc::kWeight] = Scheme::Cut(1); // w: C
-  req3.out_data_schemes[fullc::kOut] = Scheme::Red();    // y: red
-  if (!param.no_bias) {
-    req3.in_data_schemes[fullc::kBias] = Scheme::Rep();  // b: r
+};
+class FCForwardPartitioner2 : public ForwardOpPartitioner<FullyConnectedParam> {
+ public:
+  FCForwardPartitioner2(const NodeAttrs& attrs):
+    ForwardOpPartitioner<FullyConnectedParam>(attrs) {}
+  void AlignedScheme(
+      const FullyConnectedParam& param,
+      const vector<TShape>& in_data_shapes,
+      const vector<TShape>& out_data_shapes,
+      const vector<Scheme*>& in_data_schemes,
+      const vector<Scheme*>& out_data_schemes) override {
+    CHECK_EQ(in_data_shapes[fullc::kData].ndim(), 2);
+    CHECK_EQ(in_data_shapes[fullc::kWeight].ndim(), 2);
+    CHECK_EQ(out_data_shapes[fullc::kOut].ndim(), 2);
+    if (param.no_bias) {
+      CHECK_EQ(in_data_shapes.size(), 2);
+    } else {
+      CHECK_EQ(in_data_shapes.size(), 3);
+    }
+    *in_data_schemes[fullc::kData] = Scheme::Rep();    // x: r
+    *in_data_schemes[fullc::kWeight] = Scheme::Cut(0); // w: R
+    *out_data_schemes[fullc::kOut] = Scheme::Cut(1);   // y: C
+    if (!param.no_bias) {
+      *in_data_schemes[fullc::kBias] = Scheme::Cut(0); // b: R
+    }
   }
+  vector<FullyConnectedParam> Partition(
+      const FullyConnectedParam& param, size_t num_partitions) override {
+    // TODO
+    return vector<FullyConnectedParam>();
+  }
+};
+class FCForwardPartitioner3 : public ForwardOpPartitioner<FullyConnectedParam> {
+ public:
+  FCForwardPartitioner3(const NodeAttrs& attrs):
+    ForwardOpPartitioner<FullyConnectedParam>(attrs) {}
+  void AlignedScheme(
+      const FullyConnectedParam& param,
+      const vector<TShape>& in_data_shapes,
+      const vector<TShape>& out_data_shapes,
+      const vector<Scheme*>& in_data_schemes,
+      const vector<Scheme*>& out_data_schemes) override {
+    CHECK_EQ(in_data_shapes[fullc::kData].ndim(), 2);
+    CHECK_EQ(in_data_shapes[fullc::kWeight].ndim(), 2);
+    CHECK_EQ(out_data_shapes[fullc::kOut].ndim(), 2);
+    if (param.no_bias) {
+      CHECK_EQ(in_data_shapes.size(), 2);
+    } else {
+      CHECK_EQ(in_data_shapes.size(), 3);
+    }
+    *in_data_schemes[fullc::kData] = Scheme::Cut(1);   // x: C
+    *in_data_schemes[fullc::kWeight] = Scheme::Cut(1); // w: C
+    *out_data_schemes[fullc::kOut] = Scheme::Red();    // y: red
+    if (!param.no_bias) {
+      *in_data_schemes[fullc::kBias] = Scheme::Rep();  // b: r
+    }
+  }
+  vector<FullyConnectedParam> Partition(
+      const FullyConnectedParam& param, size_t num_partitions) override {
+    // TODO
+    return vector<FullyConnectedParam>();
+  }
+};
+// Two matmults in the backward propagation:
+//   - dw = dot(dy.T, x)
+//   - dx = dot(dy, w)
+//   - db = reduce_sum(dy, 0)
+// Therefore, there are following aligned schemes:
+//   - dy: C, x: r, dw: R, w: R, dx: red, db: R
+//   - dy: r, x: C, dw: C, w: C, dx, C, db: r
+//   - dy: R, x: R, dw: red, w: r, dx: R, db: red
+class FCBackwardPartitioner1 : public BackwardOpPartitioner<FullyConnectedParam> {
+ public:
+  FCBackwardPartitioner1(const NodeAttrs& attrs):
+    BackwardOpPartitioner<FullyConnectedParam>(attrs) {}
+  void AlignedScheme(
+      const FullyConnectedParam& param,
+      const vector<TShape>& out_grad_shapes,
+      const vector<TShape>& in_data_shapes,
+      const vector<TShape>& out_data_shapes,
+      const vector<TShape>& in_grad_shapes,
+      const vector<Scheme*>& out_grad_schemes,
+      const vector<Scheme*>& in_data_schemes,
+      const vector<Scheme*>& out_data_schemes,
+      const vector<Scheme*>& in_grad_schemes) {
+    *out_grad_schemes[fullc::kOut] = Scheme::Cut(1);   // dy: C
+    *in_data_schemes[fullc::kData] = Scheme::Rep();    // x: r
+    *in_grad_schemes[fullc::kWeight] = Scheme::Cut(0); // dw: R
+    *in_data_schemes[fullc::kWeight] = Scheme::Cut(0); // w: R
+    *in_grad_schemes[fullc::kData] = Scheme::Red();    // dx: red
+    if (!param.no_bias) {
+      *in_grad_schemes[fullc::kBias] = Scheme::Cut(0); // db: R
+    }
+  }
+  vector<FullyConnectedParam> Partition(
+      const FullyConnectedParam&, size_t num_partitions) {
+    // TODO
+    return vector<FullyConnectedParam>();
+  }
+};
+class FCBackwardPartitioner2 : public BackwardOpPartitioner<FullyConnectedParam> {
+ public:
+  FCBackwardPartitioner2(const NodeAttrs& attrs):
+    BackwardOpPartitioner<FullyConnectedParam>(attrs) {}
+  void AlignedScheme(
+      const FullyConnectedParam& param,
+      const vector<TShape>& out_grad_shapes,
+      const vector<TShape>& in_data_shapes,
+      const vector<TShape>& out_data_shapes,
+      const vector<TShape>& in_grad_shapes,
+      const vector<Scheme*>& out_grad_schemes,
+      const vector<Scheme*>& in_data_schemes,
+      const vector<Scheme*>& out_data_schemes,
+      const vector<Scheme*>& in_grad_schemes) {
+    *out_grad_schemes[fullc::kOut] = Scheme::Rep();    // dy: r
+    *in_data_schemes[fullc::kData] = Scheme::Cut(1);   // x: C
+    *in_grad_schemes[fullc::kWeight] = Scheme::Cut(1); // dw: C
+    *in_data_schemes[fullc::kWeight] = Scheme::Cut(1); // w: C
+    *in_grad_schemes[fullc::kData] = Scheme::Cut(1);   // dx: C
+    if (!param.no_bias) {
+      *in_grad_schemes[fullc::kBias] = Scheme::Rep();  // db: r
+    }
+  }
+  vector<FullyConnectedParam> Partition(
+      const FullyConnectedParam&, size_t num_partitions) {
+    // TODO
+    return vector<FullyConnectedParam>();
+  }
+};
+class FCBackwardPartitioner3 : public BackwardOpPartitioner<FullyConnectedParam> {
+ public:
+  FCBackwardPartitioner3(const NodeAttrs& attrs):
+    BackwardOpPartitioner<FullyConnectedParam>(attrs) {}
+  void AlignedScheme(
+      const FullyConnectedParam& param,
+      const vector<TShape>& out_grad_shapes,
+      const vector<TShape>& in_data_shapes,
+      const vector<TShape>& out_data_shapes,
+      const vector<TShape>& in_grad_shapes,
+      const vector<Scheme*>& out_grad_schemes,
+      const vector<Scheme*>& in_data_schemes,
+      const vector<Scheme*>& out_data_schemes,
+      const vector<Scheme*>& in_grad_schemes) {
+    *out_grad_schemes[fullc::kOut] = Scheme::Cut(0);  // dy: R
+    *in_data_schemes[fullc::kData] = Scheme::Cut(0);  // x: R
+    *in_grad_schemes[fullc::kWeight] = Scheme::Red(); // dw: red
+    *in_data_schemes[fullc::kWeight] = Scheme::Rep(); // w: r
+    *in_grad_schemes[fullc::kData] = Scheme::Cut(0);  // dx: R
+    if (!param.no_bias) {
+      *in_grad_schemes[fullc::kBias] = Scheme::Red(); // db: red
+    }
+  }
+  vector<FullyConnectedParam> Partition(
+      const FullyConnectedParam&, size_t num_partitions) {
+    // TODO
+    return vector<FullyConnectedParam>();
+  }
+};
+///////////////////////////////////////////////////////////////////////////////////
 
-  return {req1, req2, req3};
+
+///////////////////////////////////////////////////////////////////////////////////
+// ConvolutionOp
+// Data format NCHW
+// Filter format CoCiHW
+// Two operations in ConvolutionOp:
+//   - y = ConvForward(x, w)
+//   - y = AddTensor(y, b)
+// Therefore, there are following aligned schemes:
+//   - x: R, w: r, y: R, b: r
+//   - x: r, w: R, y: C, b: R
+//   - x: C, w: C, y: red, b: r
+class ConvForwardPartitioner1 : public ForwardOpPartitioner<ConvolutionParam> {
+ public:
+  ConvForwardPartitioner1(const NodeAttrs& attrs):
+    ForwardOpPartitioner<ConvolutionParam>(attrs) {}
+  void AlignedScheme(
+      const ConvolutionParam& param,
+      const vector<TShape>& in_data_shapes,
+      const vector<TShape>& out_data_shapes,
+      const vector<Scheme*>& in_data_schemes,
+      const vector<Scheme*>& out_data_schemes) override {
+    *in_data_schemes[conv::kData] = Scheme::Cut(0);  // x: R
+    *in_data_schemes[conv::kWeight] = Scheme::Rep(); // w: r
+    *out_data_schemes[conv::kOut] = Scheme::Cut(0);  // y: R
+    if (!param.no_bias) {
+      *in_data_schemes[conv::kBias] = Scheme::Rep(); // b: r
+    }
+  }
+  vector<ConvolutionParam> Partition(
+      const ConvolutionParam& param, size_t num_partitions) override {
+    // TODO
+    return vector<ConvolutionParam>();
+  }
+};
+class ConvForwardPartitioner2 : public ForwardOpPartitioner<ConvolutionParam> {
+ public:
+  ConvForwardPartitioner2(const NodeAttrs& attrs):
+    ForwardOpPartitioner<ConvolutionParam>(attrs) {}
+  void AlignedScheme(
+      const ConvolutionParam& param,
+      const vector<TShape>& in_data_shapes,
+      const vector<TShape>& out_data_shapes,
+      const vector<Scheme*>& in_data_schemes,
+      const vector<Scheme*>& out_data_schemes) override {
+    *in_data_schemes[conv::kData] = Scheme::Rep();    // x: r
+    *in_data_schemes[conv::kWeight] = Scheme::Cut(0); // w: R
+    *out_data_schemes[conv::kOut] = Scheme::Cut(1);   // y: C
+    if (!param.no_bias) {
+      *in_data_schemes[conv::kBias] = Scheme::Cut(0); // b: R
+    }
+  }
+  vector<ConvolutionParam> Partition(
+      const ConvolutionParam& param, size_t num_partitions) override {
+    // TODO
+    return vector<ConvolutionParam>();
+  }
+};
+class ConvForwardPartitioner3 : public ForwardOpPartitioner<ConvolutionParam> {
+ public:
+  ConvForwardPartitioner3(const NodeAttrs& attrs):
+    ForwardOpPartitioner<ConvolutionParam>(attrs) {}
+  void AlignedScheme(
+      const ConvolutionParam& param,
+      const vector<TShape>& in_data_shapes,
+      const vector<TShape>& out_data_shapes,
+      const vector<Scheme*>& in_data_schemes,
+      const vector<Scheme*>& out_data_schemes) override {
+    *in_data_schemes[conv::kData] = Scheme::Cut(1);   // x: C
+    *in_data_schemes[conv::kWeight] = Scheme::Cut(1); // w: C
+    *out_data_schemes[conv::kOut] = Scheme::Red();    // y: red
+    if (!param.no_bias) {
+      *in_data_schemes[conv::kBias] = Scheme::Rep();  // b: r
+    }
+  }
+  vector<ConvolutionParam> Partition(
+      const ConvolutionParam& param, size_t num_partitions) override {
+    // TODO
+    return vector<ConvolutionParam>();
+  }
+};
+// Data format NCHW
+// Filter format CoCiHW
+// Three operations in the backward propagation:
+//   - dw = ConvBackwardFilter(dy, x)
+//   - dx = ConvBackwardData(dy, w)
+//   - db = ConvBackwardBias(dy)
+// Therefore, there are following aligned schemes:
+//   - dy: C, x: r, dw: R, w: R, dx: red, db: R
+//   - dy: r, x: C, dw: C, w: C, dx, C, db: r
+//   - dy: R, x: R, dw: red, w: r, dx: R, db: red
+class ConvBackwardPartitioner1 : public BackwardOpPartitioner<ConvolutionParam> {
+ public:
+  ConvBackwardPartitioner1(const NodeAttrs& attrs):
+    BackwardOpPartitioner<ConvolutionParam>(attrs) {}
+  void AlignedScheme(
+      const ConvolutionParam& param,
+      const vector<TShape>& out_grad_shapes,
+      const vector<TShape>& in_data_shapes,
+      const vector<TShape>& out_data_shapes,
+      const vector<TShape>& in_grad_shapes,
+      const vector<Scheme*>& out_grad_schemes,
+      const vector<Scheme*>& in_data_schemes,
+      const vector<Scheme*>& out_data_schemes,
+      const vector<Scheme*>& in_grad_schemes) {
+    *out_grad_schemes[conv::kOut] = Scheme::Cut(1);   // dy: C
+    *in_data_schemes[conv::kData] = Scheme::Rep();    // x: r
+    *in_grad_schemes[conv::kWeight] = Scheme::Cut(0); // dw: R
+    *in_data_schemes[conv::kWeight] = Scheme::Cut(0); // w: R
+    *in_grad_schemes[conv::kData] = Scheme::Red();    // dx: red
+    if (!param.no_bias) {
+      *in_grad_schemes[conv::kBias] = Scheme::Cut(0); // db: R
+    }
+  }
+  vector<ConvolutionParam> Partition(
+      const ConvolutionParam&, size_t num_partitions) {
+    // TODO
+    return vector<ConvolutionParam>();
+  }
+};
+class ConvBackwardPartitioner2 : public BackwardOpPartitioner<ConvolutionParam> {
+ public:
+  ConvBackwardPartitioner2(const NodeAttrs& attrs):
+    BackwardOpPartitioner<ConvolutionParam>(attrs) {}
+  void AlignedScheme(
+      const ConvolutionParam& param,
+      const vector<TShape>& out_grad_shapes,
+      const vector<TShape>& in_data_shapes,
+      const vector<TShape>& out_data_shapes,
+      const vector<TShape>& in_grad_shapes,
+      const vector<Scheme*>& out_grad_schemes,
+      const vector<Scheme*>& in_data_schemes,
+      const vector<Scheme*>& out_data_schemes,
+      const vector<Scheme*>& in_grad_schemes) {
+    *out_grad_schemes[conv::kOut] = Scheme::Rep();    // dy: r
+    *in_data_schemes[conv::kData] = Scheme::Cut(1);   // x: C
+    *in_grad_schemes[conv::kWeight] = Scheme::Cut(1); // dw: C
+    *in_data_schemes[conv::kWeight] = Scheme::Cut(1); // w: C
+    *in_grad_schemes[conv::kData] = Scheme::Cut(1);   // dx: C
+    if (!param.no_bias) {
+      *in_grad_schemes[conv::kBias] = Scheme::Rep();  // db: r
+    }
+  }
+  vector<ConvolutionParam> Partition(
+      const ConvolutionParam&, size_t num_partitions) {
+    // TODO
+    return vector<ConvolutionParam>();
+  }
+};
+class ConvBackwardPartitioner3 : public BackwardOpPartitioner<ConvolutionParam> {
+ public:
+  ConvBackwardPartitioner3(const NodeAttrs& attrs):
+    BackwardOpPartitioner<ConvolutionParam>(attrs) {}
+  void AlignedScheme(
+      const ConvolutionParam& param,
+      const vector<TShape>& out_grad_shapes,
+      const vector<TShape>& in_data_shapes,
+      const vector<TShape>& out_data_shapes,
+      const vector<TShape>& in_grad_shapes,
+      const vector<Scheme*>& out_grad_schemes,
+      const vector<Scheme*>& in_data_schemes,
+      const vector<Scheme*>& out_data_schemes,
+      const vector<Scheme*>& in_grad_schemes) {
+    *out_grad_schemes[conv::kOut] = Scheme::Cut(0);  // dy: R
+    *in_data_schemes[conv::kData] = Scheme::Cut(0);  // x: R
+    *in_grad_schemes[conv::kWeight] = Scheme::Red(); // dw: red
+    *in_data_schemes[conv::kWeight] = Scheme::Rep(); // w: r
+    *in_grad_schemes[conv::kData] = Scheme::Cut(0);  // dx: R
+    if (!param.no_bias) {
+      *in_grad_schemes[conv::kBias] = Scheme::Red(); // db: red
+    }
+  }
+  vector<ConvolutionParam> Partition(
+      const ConvolutionParam&, size_t num_partitions) {
+    // TODO
+    return vector<ConvolutionParam>();
+  }
+};
+
+////////////////////////////////////////////////////////////////////////////
+vector<SchemeRequest> MakeSchemeRequest(
+    const vector<TShape>& input_shapes,
+    const vector<TShape>& output_shapes,
+    const vector<shared_ptr<OpPartitioner>>& pttns) {
+  vector<SchemeRequest> ret;
+  for (auto pttn : pttns) {
+    SchemeRequest req;
+    req.input_schemes.resize(input_shapes.size());
+    req.output_schemes.resize(output_shapes.size());
+    vector<Scheme*> is_ptr(input_shapes.size()), os_ptr(output_shapes.size());
+    for (int i = 0; i < input_shapes.size(); ++i) {
+      is_ptr[i] = &req.input_schemes[i];
+    }
+    for (int i = 0; i < output_shapes.size(); ++i) {
+      os_ptr[i] = &req.output_schemes[i];
+    }
+    pttn->AttrsAlignedScheme(input_shapes, output_shapes, is_ptr, os_ptr);
+    // TODO: AttrPartition function
+    ret.push_back(std::move(req));
+  }
+  return ret;
 }
 
-template<>
-BackwardSchemeRequests BackwardAlignedSchemes<FullyConnectedParam>(
-    const FullyConnectedParam& param,
-    const std::vector<TShape>& out_grad_shapes,
-    const std::vector<TShape>& in_data_shapes,
-    const std::vector<TShape>& out_data_shapes,
-    const std::vector<TShape>& in_grad_shapes) {
-  BackwardSchemeRequest req1, req2, req3;
-
-  // Two matmults in the backward propagation:
-  //   - dw = dot(dy.T, x)
-  //   - dx = dot(dy, w)
-  //   - db = reduce_sum(dy, 0)
-  // Therefore, there are following aligned schemes:
-  //   - dy: C, x: r, dw: R, w: R, dx: red, db: R
-  //   - dy: r, x: C, dw: C, w: C, dx, C, db: r
-  //   - dy: R, x: R, dw: red, w: r, dx: R, db: red
-  req1.in_data_schemes.resize(2);
-  req1.in_grad_schemes.resize(param.no_bias? 2: 3);
-  req1.out_grad_schemes.resize(1);
-  req1.out_grad_schemes[fullc::kOut] = Scheme::Cut(1);   // dy: C
-  req1.in_data_schemes[fullc::kData] = Scheme::Rep();    // x: r
-  req1.in_grad_schemes[fullc::kWeight] = Scheme::Cut(0); // dw: R
-  req1.in_data_schemes[fullc::kWeight] = Scheme::Cut(0); // w: R
-  req1.in_grad_schemes[fullc::kData] = Scheme::Red();    // dx: red
-  if (!param.no_bias) {
-    req1.in_grad_schemes[fullc::kBias] = Scheme::Cut(0); // db: R
-  }
-
-  req2.in_data_schemes.resize(2);
-  req2.in_grad_schemes.resize(param.no_bias? 2: 3);
-  req2.out_grad_schemes.resize(1);
-  req2.out_grad_schemes[fullc::kOut] = Scheme::Rep();    // dy: r
-  req2.in_data_schemes[fullc::kData] = Scheme::Cut(1);   // x: C
-  req2.in_grad_schemes[fullc::kWeight] = Scheme::Cut(1); // dw: C
-  req2.in_data_schemes[fullc::kWeight] = Scheme::Cut(1); // w: C
-  req2.in_grad_schemes[fullc::kData] = Scheme::Cut(1);   // dx: C
-  if (!param.no_bias) {
-    req2.in_grad_schemes[fullc::kBias] = Scheme::Rep();  // db: r
-  }
-
-  req3.in_data_schemes.resize(2);
-  req3.in_grad_schemes.resize(param.no_bias? 2: 3);
-  req3.out_grad_schemes.resize(1);
-  req3.out_grad_schemes[fullc::kOut] = Scheme::Cut(0);  // dy: R
-  req3.in_data_schemes[fullc::kData] = Scheme::Cut(0);  // x: R
-  req3.in_grad_schemes[fullc::kWeight] = Scheme::Red(); // dw: red
-  req3.in_data_schemes[fullc::kWeight] = Scheme::Rep(); // w: r
-  req3.in_grad_schemes[fullc::kData] = Scheme::Cut(0);  // dx: R
-  if (!param.no_bias) {
-    req3.in_grad_schemes[fullc::kBias] = Scheme::Red(); // db: red
-  }
-
-  return {req1, req2, req3};
-}
-
-template<>
-ForwardSchemeRequests ForwardAlignedSchemes<ConvolutionParam>(
-    const ConvolutionParam& param,
-    const std::vector<TShape>& in_data_shapes,
-    const std::vector<TShape>& out_data_shapes) {
-  CHECK_EQ(param.num_group, 1);
-  ForwardSchemeRequest req1, req2, req3;
-  // Data format NCHW
-  // Filter format CoCiHW
-  // Two operations in ConvolutionOp:
-  //   - y = ConvForward(x, w)
-  //   - y = AddTensor(y, b)
-  // Therefore, there are following aligned schemes:
-  //   - x: R, w: r, y: R, b: r
-  //   - x: r, w: R, y: C, b: R
-  //   - x: C, w: C, y: red, b: r
-  req1.in_data_schemes.resize(param.no_bias? 2: 3);
-  req1.out_data_schemes.resize(1);
-  req1.in_data_schemes[conv::kData] = Scheme::Cut(0);  // x: R
-  req1.in_data_schemes[conv::kWeight] = Scheme::Rep(); // w: r
-  req1.out_data_schemes[conv::kOut] = Scheme::Cut(0);  // y: R
-  if (!param.no_bias) {
-    req1.in_data_schemes[conv::kBias] = Scheme::Rep(); // b: r
-  }
-
-  req2.in_data_schemes.resize(param.no_bias? 2: 3);
-  req2.out_data_schemes.resize(1);
-  req2.in_data_schemes[conv::kData] = Scheme::Rep();    // x: r
-  req2.in_data_schemes[conv::kWeight] = Scheme::Cut(0); // w: R
-  req2.out_data_schemes[conv::kOut] = Scheme::Cut(1);   // y: C
-  if (!param.no_bias) {
-    req2.in_data_schemes[conv::kBias] = Scheme::Cut(0); // b: R
-  }
-
-  req3.in_data_schemes.resize(param.no_bias? 2: 3);
-  req3.out_data_schemes.resize(1);
-  req3.in_data_schemes[conv::kData] = Scheme::Cut(1);   // x: C
-  req3.in_data_schemes[conv::kWeight] = Scheme::Cut(1); // w: C
-  req3.out_data_schemes[conv::kOut] = Scheme::Red();    // y: red
-  if (!param.no_bias) {
-    req3.in_data_schemes[conv::kBias] = Scheme::Rep();  // b: r
-  }
-
-  return {req1, req2, req3};
-}
-
-template<>
-BackwardSchemeRequests BackwardAlignedSchemes<ConvolutionParam>(
-    const ConvolutionParam& param,
-    const std::vector<TShape>& out_grad_shapes,
-    const std::vector<TShape>& in_data_shapes,
-    const std::vector<TShape>& out_data_shapes,
-    const std::vector<TShape>& in_grad_shapes) {
-  CHECK_EQ(param.num_group, 1);
-  BackwardSchemeRequest req1, req2, req3;
-  // Data format NCHW
-  // Filter format CoCiHW
-  // Three operations in the backward propagation:
-  //   - dw = ConvBackwardFilter(dy, x)
-  //   - dx = ConvBackwardData(dy, w)
-  //   - db = ConvBackwardBias(dy)
-  // Therefore, there are following aligned schemes:
-  //   - dy: C, x: r, dw: R, w: R, dx: red, db: R
-  //   - dy: r, x: C, dw: C, w: C, dx, C, db: r
-  //   - dy: R, x: R, dw: red, w: r, dx: R, db: red
-  req1.in_data_schemes.resize(2);
-  req1.in_grad_schemes.resize(param.no_bias? 2: 3);
-  req1.out_grad_schemes.resize(1);
-  req1.out_grad_schemes[conv::kOut] = Scheme::Cut(1);   // dy: C
-  req1.in_data_schemes[conv::kData] = Scheme::Rep();    // x: r
-  req1.in_grad_schemes[conv::kWeight] = Scheme::Cut(0); // dw: R
-  req1.in_data_schemes[conv::kWeight] = Scheme::Cut(0); // w: R
-  req1.in_grad_schemes[conv::kData] = Scheme::Red();    // dx: red
-  if (!param.no_bias) {
-    req1.in_grad_schemes[conv::kBias] = Scheme::Cut(0); // db: R
-  }
-
-  req2.in_data_schemes.resize(2);
-  req2.in_grad_schemes.resize(param.no_bias? 2: 3);
-  req2.out_grad_schemes.resize(1);
-  req2.out_grad_schemes[conv::kOut] = Scheme::Rep();    // dy: r
-  req2.in_data_schemes[conv::kData] = Scheme::Cut(1);   // x: C
-  req2.in_grad_schemes[conv::kWeight] = Scheme::Cut(1); // dw: C
-  req2.in_data_schemes[conv::kWeight] = Scheme::Cut(1); // w: C
-  req2.in_grad_schemes[conv::kData] = Scheme::Cut(1);   // dx: C
-  if (!param.no_bias) {
-    req2.in_grad_schemes[conv::kBias] = Scheme::Rep();  // db: r
-  }
-
-  req3.in_data_schemes.resize(2);
-  req3.in_grad_schemes.resize(param.no_bias? 2: 3);
-  req3.out_grad_schemes.resize(1);
-  req3.out_grad_schemes[conv::kOut] = Scheme::Cut(0);  // dy: R
-  req3.in_data_schemes[conv::kData] = Scheme::Cut(0);  // x: R
-  req3.in_grad_schemes[conv::kWeight] = Scheme::Red(); // dw: red
-  req3.in_data_schemes[conv::kWeight] = Scheme::Rep(); // w: r
-  req3.in_grad_schemes[conv::kData] = Scheme::Cut(0);  // dx: R
-  if (!param.no_bias) {
-    req3.in_grad_schemes[conv::kBias] = Scheme::Red(); // db: red
-  }
-
-  return {req1, req2, req3};
-}
-
-
-/////////////////////////////////////////////////////////////////
-ForwardSchemeRequests ForwardAlignedSchemesCaller(
+vector<SchemeRequest> OpForwardAlignedSchemes(
     const NodeAttrs& attrs,
-    const std::vector<TShape>& input_shapes,
-    const std::vector<TShape>& output_shapes) {
-  std::vector<std::pair<std::string, std::string> > kwargs(
-      attrs.dict.begin(), attrs.dict.end());
+    const vector<TShape>& input_shapes,
+    const vector<TShape>& output_shapes) {
   if (attrs.op->name == "FullyConnected") {
-    FullyConnectedParam param;
-    param.Init(kwargs);
-    return ForwardAlignedSchemes<FullyConnectedParam>(param, input_shapes, output_shapes);
+    shared_ptr<OpPartitioner> pttn1(new FCForwardPartitioner1(attrs));
+    shared_ptr<OpPartitioner> pttn2(new FCForwardPartitioner2(attrs));
+    shared_ptr<OpPartitioner> pttn3(new FCForwardPartitioner3(attrs));
+    return MakeSchemeRequest(input_shapes, output_shapes, {pttn1, pttn2, pttn3});
   } else if (attrs.op->name == "Convolution") {
-    ConvolutionParam param;
-    param.Init(kwargs);
-    return ForwardAlignedSchemes<ConvolutionParam>(param, input_shapes, output_shapes);
+    shared_ptr<OpPartitioner> pttn1(new ConvForwardPartitioner1(attrs));
+    shared_ptr<OpPartitioner> pttn2(new ConvForwardPartitioner2(attrs));
+    shared_ptr<OpPartitioner> pttn3(new ConvForwardPartitioner3(attrs));
+    return MakeSchemeRequest(input_shapes, output_shapes, {pttn1, pttn2, pttn3});
   } else {
     LOG(FATAL) << "No aligned scheme defined for operator: " << attrs.op->name;
-    return ForwardSchemeRequests();
   }
+  return vector<SchemeRequest>();
 }
 
-BackwardSchemeRequests BackwardAlignedSchemesCaller(
+vector<SchemeRequest> OpBackwardAlignedSchemes(
     const NodeAttrs& attrs,
-    const std::vector<TShape>& out_grad_shapes,
-    const std::vector<TShape>& in_data_shapes,
-    const std::vector<TShape>& out_data_shapes,
-    const std::vector<TShape>& in_grad_shapes) {
-  std::vector<std::pair<std::string, std::string> > kwargs(
-      attrs.dict.begin(), attrs.dict.end());
+    const vector<TShape>& input_shapes,
+    const vector<TShape>& output_shapes) {
   if (attrs.op->name == "_backward_FullyConnected") {
-    FullyConnectedParam param;
-    param.Init(kwargs);
-    return BackwardAlignedSchemes<FullyConnectedParam>(
-        param, out_grad_shapes, in_data_shapes,
-        out_data_shapes, in_grad_shapes);
+    shared_ptr<OpPartitioner> pttn1(new FCBackwardPartitioner1(attrs));
+    shared_ptr<OpPartitioner> pttn2(new FCBackwardPartitioner2(attrs));
+    shared_ptr<OpPartitioner> pttn3(new FCBackwardPartitioner3(attrs));
+    return MakeSchemeRequest(input_shapes, output_shapes, {pttn1, pttn2, pttn3});
   } else if (attrs.op->name == "_backward_Convolution") {
-    ConvolutionParam param;
-    param.Init(kwargs);
-    return BackwardAlignedSchemes<ConvolutionParam>(
-        param, out_grad_shapes, in_data_shapes,
-        out_data_shapes, in_grad_shapes);
+    shared_ptr<OpPartitioner> pttn1(new ConvBackwardPartitioner1(attrs));
+    shared_ptr<OpPartitioner> pttn2(new ConvBackwardPartitioner2(attrs));
+    shared_ptr<OpPartitioner> pttn3(new ConvBackwardPartitioner3(attrs));
+    return MakeSchemeRequest(input_shapes, output_shapes, {pttn1, pttn2, pttn3});
   } else {
     LOG(FATAL) << "No aligned scheme defined for operator: " << attrs.op->name;
-    return BackwardSchemeRequests();
   }
-}
-
-std::vector<SchemeRequest> OpForwardAlignedSchemes(
-    const NodeAttrs& attrs,
-    const std::vector<TShape>& input_shapes,
-    const std::vector<TShape>& output_shapes) {
-  const ForwardSchemeRequests& fwdreqs =
-    ForwardAlignedSchemesCaller(attrs, input_shapes, output_shapes);
-  std::vector<SchemeRequest> reqs;
-  for (size_t i = 0; i < fwdreqs.size(); ++i) {
-    reqs.emplace_back(fwdreqs[i].in_data_schemes,
-                      fwdreqs[i].out_data_schemes);
-  }
-  return reqs;
-}
-
-std::vector<SchemeRequest> OpBackwardAlignedSchemes(
-    const NodeAttrs& attrs,
-    const std::vector<TShape>& input_shapes,
-    const std::vector<TShape>& output_shapes) {
-  const ParsedOpProp& prop = nnvm::get<ParsedOpProp>(attrs.parsed);
-  // Split inputs into multiple vectors.
-  std::vector<TShape> out_grad_shapes(prop.ptr->NumVisibleOutputs());
-  std::vector<TShape> in_data_shapes(prop.ptr->ListArguments().size());
-  std::vector<TShape> out_data_shapes(prop.ptr->NumOutputs());
-  // Pointers to convert the one input array to multiple arrays with semantics.
-  std::vector<TShape*> ogs_ptr(out_grad_shapes.size());
-  for (size_t i = 0; i < out_grad_shapes.size(); ++i) {
-    ogs_ptr[i] = &out_grad_shapes[i];
-  }
-  std::vector<TShape*> ids_ptr(in_data_shapes.size());
-  for (size_t i = 0; i < in_data_shapes.size(); ++i) {
-    ids_ptr[i] = &in_data_shapes[i];
-  }
-  std::vector<TShape*> ods_ptr(out_data_shapes.size());
-  for (size_t i = 0; i < out_data_shapes.size(); ++i) {
-    ods_ptr[i] = &out_data_shapes[i];
-  }
-  std::vector<TShape*> arg_ptr = prop.ptr->BackwardInputs(
-      ogs_ptr, ids_ptr, ods_ptr);
-  for (size_t i = 0; i < input_shapes.size(); ++i) {
-    *arg_ptr[i] = input_shapes[i];
-  }
-  const BackwardSchemeRequests& bwdreqs =
-    BackwardAlignedSchemesCaller(
-        attrs, out_grad_shapes, in_data_shapes,
-        out_data_shapes, output_shapes);
-  std::vector<SchemeRequest> reqs;
-  for (const BackwardSchemeRequest& breq : bwdreqs) {
-    // Convert back to one input array.
-    const std::vector<Scheme>& input_schemes =
-      prop.ptr->BackwardInputs(breq.out_grad_schemes,
-                               breq.in_data_schemes,
-                               breq.out_data_schemes);
-    reqs.emplace_back(input_schemes, breq.in_grad_schemes);
-  }
-  return reqs;
+  return vector<SchemeRequest>();
 }
 
 void RegisterOpAlignedSchemes() {
   using namespace nnvm::pass;
   const string kAttrName = "FAlignedSchemes";
   using AType = nnvm::pass::FAlignedSchemes;
-  // TODO
   for (const string& name : dmlc::Registry<::nnvm::Op>::ListAllNames()) {
     Op& op = dmlc::Registry<::nnvm::Op>::Get()->__REGISTER_OR_GET__(name);
     cout << op.name << endl;
@@ -445,7 +718,6 @@ void RegisterOpAlignedSchemes() {
       op.set_attr<AType>(kAttrName, CutFirstKDimsSchemes<2>);
     }
   }
-  LOG(INFO) << "Map size: " << Op::GetAttr<AType>(kAttrName).size();
 }
 
 }  // namespace op
