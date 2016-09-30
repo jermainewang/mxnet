@@ -50,22 +50,6 @@ void SplitBackwardInputs(const NodeAttrs& attrs,
 }
 }  // namespace
 
-/*struct ForwardSchemeRequest {
-  vector<Scheme> in_data_schemes;
-  vector<Scheme> out_data_schemes;
-};
-
-typedef vector<ForwardSchemeRequest> ForwardSchemeRequests;
-
-struct BackwardSchemeRequest {
-  vector<Scheme> out_grad_schemes;
-  vector<Scheme> in_data_schemes;
-  vector<Scheme> out_data_schemes;
-  vector<Scheme> in_grad_schemes;
-};
-
-typedef vector<BackwardSchemeRequest> BackwardSchemeRequests;*/
-
 class OpPartitioner {
  public:
   OpPartitioner(const NodeAttrs& attrs): attrs_(attrs) {}
@@ -190,6 +174,12 @@ class BackwardOpPartitioner : public OpPartitioner {
 };
 
 ///////////////////////////////////////////////////////////////////////////
+// Return node attributes that are exactly the same as the given one.
+vector<NodeAttrs> IdenticalPartition(const NodeAttrs& attrs,
+                                     size_t num_partitions) {
+  return vector<NodeAttrs>(num_partitions, attrs);
+}
+
 template<size_t K>
 vector<SchemeRequest> CutFirstKDimsSchemes(
     const NodeAttrs&,
@@ -206,6 +196,8 @@ vector<SchemeRequest> CutFirstKDimsSchemes(
       CHECK_LT(i, output_shapes[j].ndim());
       req.output_schemes.push_back(Scheme::Cut(i));
     }
+    // Attribute partitioner.
+    req.partitioner = &IdenticalPartition;
     reqs.push_back(req);
   }
   return reqs;
@@ -227,17 +219,12 @@ vector<SchemeRequest> CutAllDimsSchemes(
       CHECK_LT(i, output_shapes[j].ndim());
       req.output_schemes.push_back(Scheme::Cut(i));
     }
+    // Attribute partitioner.
+    req.partitioner = &IdenticalPartition;
     reqs.push_back(req);
   }
   return reqs;
 }
-
-// Return node attributes that are exactly the same as the given one.
-vector<NodeAttrs> IdenticalPartition(const NodeAttrs& attrs,
-                                     size_t num_partitions) {
-  return vector<NodeAttrs>(num_partitions, attrs);
-}
-
 ///////////////////////////////////////////////////////////////////////////////////
 // FullyConnectedOp
 // One matmult in the forward propagation:
@@ -273,8 +260,10 @@ class FCForwardPartitioner1 : public ForwardOpPartitioner<FullyConnectedParam> {
   }
   vector<FullyConnectedParam> Partition(
       const FullyConnectedParam& param, size_t num_partitions) override {
-    // TODO
-    return vector<FullyConnectedParam>();
+    FullyConnectedParam p;
+    p.no_bias = param_.no_bias;
+    p.num_hidden = param_.num_hidden;
+    return vector<FullyConnectedParam>(num_partitions, p);
   }
 };
 class FCForwardPartitioner2 : public ForwardOpPartitioner<FullyConnectedParam> {
@@ -304,8 +293,11 @@ class FCForwardPartitioner2 : public ForwardOpPartitioner<FullyConnectedParam> {
   }
   vector<FullyConnectedParam> Partition(
       const FullyConnectedParam& param, size_t num_partitions) override {
-    // TODO
-    return vector<FullyConnectedParam>();
+    CHECK(param_.num_hidden % num_partitions == 0);
+    FullyConnectedParam p;
+    p.no_bias = param_.no_bias;
+    p.num_hidden = param_.num_hidden / num_partitions;
+    return vector<FullyConnectedParam>(num_partitions, p);
   }
 };
 class FCForwardPartitioner3 : public ForwardOpPartitioner<FullyConnectedParam> {
@@ -335,8 +327,10 @@ class FCForwardPartitioner3 : public ForwardOpPartitioner<FullyConnectedParam> {
   }
   vector<FullyConnectedParam> Partition(
       const FullyConnectedParam& param, size_t num_partitions) override {
-    // TODO
-    return vector<FullyConnectedParam>();
+    FullyConnectedParam p;
+    p.no_bias = param_.no_bias;
+    p.num_hidden = param_.num_hidden;
+    return vector<FullyConnectedParam>(num_partitions, p);
   }
 };
 // Two matmults in the backward propagation:
@@ -372,8 +366,11 @@ class FCBackwardPartitioner1 : public BackwardOpPartitioner<FullyConnectedParam>
   }
   vector<FullyConnectedParam> Partition(
       const FullyConnectedParam&, size_t num_partitions) {
-    // TODO
-    return vector<FullyConnectedParam>();
+    CHECK(param_.num_hidden % num_partitions == 0);
+    FullyConnectedParam p;
+    p.no_bias = param_.no_bias;
+    p.num_hidden = param_.num_hidden / num_partitions;
+    return vector<FullyConnectedParam>(num_partitions, p);
   }
 };
 class FCBackwardPartitioner2 : public BackwardOpPartitioner<FullyConnectedParam> {
@@ -401,8 +398,10 @@ class FCBackwardPartitioner2 : public BackwardOpPartitioner<FullyConnectedParam>
   }
   vector<FullyConnectedParam> Partition(
       const FullyConnectedParam&, size_t num_partitions) {
-    // TODO
-    return vector<FullyConnectedParam>();
+    FullyConnectedParam p;
+    p.no_bias = param_.no_bias;
+    p.num_hidden = param_.num_hidden;
+    return vector<FullyConnectedParam>(num_partitions, p);
   }
 };
 class FCBackwardPartitioner3 : public BackwardOpPartitioner<FullyConnectedParam> {
@@ -430,8 +429,10 @@ class FCBackwardPartitioner3 : public BackwardOpPartitioner<FullyConnectedParam>
   }
   vector<FullyConnectedParam> Partition(
       const FullyConnectedParam&, size_t num_partitions) {
-    // TODO
-    return vector<FullyConnectedParam>();
+    FullyConnectedParam p;
+    p.no_bias = param_.no_bias;
+    p.num_hidden = param_.num_hidden;
+    return vector<FullyConnectedParam>(num_partitions, p);
   }
 };
 ///////////////////////////////////////////////////////////////////////////////////
@@ -467,8 +468,8 @@ class ConvForwardPartitioner1 : public ForwardOpPartitioner<ConvolutionParam> {
   }
   vector<ConvolutionParam> Partition(
       const ConvolutionParam& param, size_t num_partitions) override {
-    // TODO
-    return vector<ConvolutionParam>();
+    CHECK_EQ(param_.num_group, 1);
+    return vector<ConvolutionParam>(num_partitions, param_);
   }
 };
 class ConvForwardPartitioner2 : public ForwardOpPartitioner<ConvolutionParam> {
@@ -490,8 +491,11 @@ class ConvForwardPartitioner2 : public ForwardOpPartitioner<ConvolutionParam> {
   }
   vector<ConvolutionParam> Partition(
       const ConvolutionParam& param, size_t num_partitions) override {
-    // TODO
-    return vector<ConvolutionParam>();
+    CHECK_EQ(param_.num_group, 1);
+    CHECK_EQ(param_.num_filter % num_partitions, 0);
+    ConvolutionParam p = param_;
+    p.num_filter /= num_partitions;
+    return vector<ConvolutionParam>(num_partitions, p);
   }
 };
 class ConvForwardPartitioner3 : public ForwardOpPartitioner<ConvolutionParam> {
@@ -513,8 +517,8 @@ class ConvForwardPartitioner3 : public ForwardOpPartitioner<ConvolutionParam> {
   }
   vector<ConvolutionParam> Partition(
       const ConvolutionParam& param, size_t num_partitions) override {
-    // TODO
-    return vector<ConvolutionParam>();
+    CHECK_EQ(param_.num_group, 1);
+    return vector<ConvolutionParam>(num_partitions, param_);
   }
 };
 // Data format NCHW
@@ -552,8 +556,11 @@ class ConvBackwardPartitioner1 : public BackwardOpPartitioner<ConvolutionParam> 
   }
   vector<ConvolutionParam> Partition(
       const ConvolutionParam&, size_t num_partitions) {
-    // TODO
-    return vector<ConvolutionParam>();
+    CHECK_EQ(param_.num_group, 1);
+    CHECK_EQ(param_.num_filter % num_partitions, 0);
+    ConvolutionParam p = param_;
+    p.num_filter /= num_partitions;
+    return vector<ConvolutionParam>(num_partitions, p);
   }
 };
 class ConvBackwardPartitioner2 : public BackwardOpPartitioner<ConvolutionParam> {
@@ -581,8 +588,8 @@ class ConvBackwardPartitioner2 : public BackwardOpPartitioner<ConvolutionParam> 
   }
   vector<ConvolutionParam> Partition(
       const ConvolutionParam&, size_t num_partitions) {
-    // TODO
-    return vector<ConvolutionParam>();
+    CHECK_EQ(param_.num_group, 1);
+    return vector<ConvolutionParam>(num_partitions, param_);
   }
 };
 class ConvBackwardPartitioner3 : public BackwardOpPartitioner<ConvolutionParam> {
@@ -610,8 +617,8 @@ class ConvBackwardPartitioner3 : public BackwardOpPartitioner<ConvolutionParam> 
   }
   vector<ConvolutionParam> Partition(
       const ConvolutionParam&, size_t num_partitions) {
-    // TODO
-    return vector<ConvolutionParam>();
+    CHECK_EQ(param_.num_group, 1);
+    return vector<ConvolutionParam>(num_partitions, param_);
   }
 };
 
@@ -633,7 +640,9 @@ vector<SchemeRequest> MakeSchemeRequest(
       os_ptr[i] = &req.output_schemes[i];
     }
     pttn->AttrsAlignedScheme(input_shapes, output_shapes, is_ptr, os_ptr);
-    // TODO: AttrPartition function
+    req.partitioner = [pttn](const NodeAttrs& , size_t n) {
+      return pttn->AttrsPartition(n);
+    };
     ret.push_back(std::move(req));
   }
   return ret;
@@ -685,7 +694,6 @@ void RegisterOpAlignedSchemes() {
   using AType = nnvm::pass::FAlignedSchemes;
   for (const string& name : dmlc::Registry<::nnvm::Op>::ListAllNames()) {
     Op& op = dmlc::Registry<::nnvm::Op>::Get()->__REGISTER_OR_GET__(name);
-    cout << op.name << endl;
     if (Op::GetAttr<AType>(kAttrName).count(&op) > 0) {
       // Already registered.
       continue;
