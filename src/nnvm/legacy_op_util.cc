@@ -319,7 +319,7 @@ void RegisterLegacyOpProp() {
     back_op.set_attr<nnvm::FInplaceOption>("FInplaceOption", OpBackInplaceOption);
     back_op.set_attr<FResourceRequest>(
         "FResourceRequest", OpBackResourceRequest);
-    back_op.set_attr<bool>("TIsLayerOpBackward", true);
+    back_op.set_attr<const Op*>("TIsLayerOpBackward", &op);
 
   }
   // Partitioner register.

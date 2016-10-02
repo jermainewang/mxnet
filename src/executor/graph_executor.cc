@@ -260,13 +260,16 @@ void GraphExecutor::Init(nnvm::Symbol symbol,
                             ctx_map, in_args, arg_grad_store,
                             grad_req_type, aux_states);
   g = AttachOpExecs(g);
+  LOG(INFO) << "Finished attach operator executors.";
   g = AttachOpResources(g);
+  LOG(INFO) << "Finished attach operator resources.";
   graph_ = std::move(g);
   if (shared_exec != nullptr) {
     this->InitDataEntryMemory(dynamic_cast<GraphExecutor*>(shared_exec)->data_pool_);
   } else {
     this->InitDataEntryMemory({});
   }
+  LOG(INFO) << "Finished initialize all memory.";
   {
     // initialize output arrays
     auto& idx = graph_.indexed_graph();
@@ -377,7 +380,11 @@ Graph GraphExecutor::InitGraph(nnvm::Symbol symbol,
   nnvm::Graph g = InitFullGraph(symbol, grad_req_type, arg_grad_store);
   g = InferShapeType(g, in_args, aux_states);
   g = nnvm::ApplyPass(g, "PartitionPass");
-  g = AssignContext(g, default_ctx, ctx_map,
+  std::map<std::string, Context> group_contexts;
+  for (size_t i = 0; i < 2; ++i) {
+    group_contexts["group:" + std::to_string(i)] = Context::GPU(i);
+  }
+  g = AssignContext(g, default_ctx, group_contexts,
                     in_args,
                     grad_store_,
                     aux_states,
@@ -408,7 +415,9 @@ Graph GraphExecutor::InitGraph(nnvm::Symbol symbol,
     num_forward_nodes_ = std::max(
         num_forward_nodes_, static_cast<size_t>(idx.outputs()[i].node_id + 1));
   }
+  LOG(INFO) << "Num forward nodes: " << num_forward_nodes_;
   g = nnvm::ApplyPass(g, "PlanMemory");
+  LOG(INFO) << "Successfully applied all NNVM passes.";
   return g;
 }
 
