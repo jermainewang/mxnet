@@ -118,21 +118,29 @@ nnvm::Graph GraphExecutor::InitFullGraph(
 
   nnvm::Graph g;
   g.outputs = symbol.outputs;
+
   bool need_grad = false;
   for (OpReqType req : grad_req_type) {
-    if (req != kNullOp) need_grad = true;
+    if (req != kNullOp) {
+      need_grad = true;
+      break;
+    }
   }
-  if (!need_grad) return g;
+  if (!need_grad) {
+    // No gradient is needed, no need to generate backward graph.
+    return g;
+  }
   for (size_t i = 0; i < g.outputs.size(); ++i) {
-    head_grad_entry_.emplace_back(NodeEntry{nnvm::Node::Create(), 0, 0});
-    head_grad_map_[head_grad_entry_.back().node.get()] = i;
+    NodePtr node = nnvm::Node::Create();
+    node->attrs.name = "__head_grad_" + std::to_string(i);
+    head_grad_entry_.emplace_back(NodeEntry{node, 0, 0});
+    head_grad_map_[node.get()] = i;
   }
   std::vector<NodePtr> args = symbol.ListInputs(nnvm::Symbol::kReadOnlyArgs);
   std::vector<NodeEntry> xs;
   for (size_t i = 0; i < grad_req_type.size(); ++i) {
     if (grad_req_type[i] != kNullOp) {
-      grad_store_.emplace_back(
-          std::make_pair(grad_req_type[i], arg_grad_store[i]));
+      grad_store_.emplace_back(grad_req_type[i], arg_grad_store[i]);
       xs.emplace_back(NodeEntry{args[i], 0, 0});
     }
   }
@@ -382,7 +390,8 @@ Graph GraphExecutor::InitGraph(nnvm::Symbol symbol,
   g = nnvm::ApplyPass(g, "PartitionPass");
   std::map<std::string, Context> group_contexts;
   for (size_t i = 0; i < 2; ++i) {
-    group_contexts["group:" + std::to_string(i)] = Context::GPU(i);
+    //group_contexts["group:" + std::to_string(i)] = Context::GPU(i);
+    group_contexts["group:" + std::to_string(i)] = Context::CPU();
   }
   g = AssignContext(g, default_ctx, group_contexts,
                     in_args,
@@ -429,10 +438,10 @@ void GraphExecutor::InitDataEntryMemory(const std::vector<NDArray>& shared_pool)
   // get the graph
   const auto& idx = graph_.indexed_graph();
   // get the storage
-  const auto& vdtype = graph_.GetAttr<DTypeVector>("dtype");
-  const auto& vshape = graph_.GetAttr<ShapeVector>("shape");
-  const auto& vstorage = graph_.GetAttr<StorageVector>("storage_id");
-  const auto& vctx = graph_.GetAttr<ContextVector>("context");
+  const DTypeVector& vdtype = graph_.GetAttr<DTypeVector>("dtype");
+  const ShapeVector& vshape = graph_.GetAttr<ShapeVector>("shape");
+  const StorageVector& vstorage = graph_.GetAttr<StorageVector>("storage_id");
+  const ContextVector& vctx = graph_.GetAttr<ContextVector>("context");
   CHECK_EQ(idx.num_node_entries(), vshape.size());
   CHECK_EQ(idx.num_node_entries(), vdtype.size());
   CHECK_EQ(idx.num_node_entries(), vstorage.size());
@@ -449,16 +458,19 @@ void GraphExecutor::InitDataEntryMemory(const std::vector<NDArray>& shared_pool)
   std::vector<PoolEntry> pool_info;
 
   // assign array to head gradient
-  for (size_t i = num_forward_inputs_; i < idx.input_nodes().size(); ++i) {
-    uint32_t nid = idx.input_nodes().at(i);
-    uint32_t oid = head_grad_map_.at(idx[nid].source);
-    uint32_t eid = idx.entry_id(idx.outputs()[oid]);
+  LOG(INFO) << "Point head gradient entry to given NDArray";
+  for (const auto& kv : head_grad_map_) {
+    const nnvm::Node* head_grad_node = kv.first;
+    const size_t output_idx = kv.second;
+    const uint32_t nid = idx.node_id(head_grad_node);
+    const uint32_t eid = idx.entry_id(idx.outputs()[output_idx]);
     CHECK_NE(vshape[eid].ndim(), 0);
     CHECK_NE(vdtype[eid], -1);
     data_entry_[idx.entry_id(nid, 0)] =
         NDArray(vshape[eid], data_context[eid], vdtype[eid]);
   }
   // get maximum bytes in each pool
+  LOG(INFO) << "Compute maximum bytes of each memory pool.";
   for (size_t i = 0; i < vshape.size(); ++i) {
     size_t bytes = vshape[i].Size() * mshadow::mshadow_sizeof(vdtype[i]);
     int storage_id = vstorage[i];
@@ -510,7 +522,9 @@ void GraphExecutor::InitDataEntryMemory(const std::vector<NDArray>& shared_pool)
     if (!data_entry_[i].is_none()) continue;
     // assign allocated array by storage id
     int storage_id = vstorage[i];
-    CHECK_GE(storage_id, 0) << "Do not support runtime shape op yet";
+    CHECK_GE(storage_id, 0)
+      << "No storage assigned to entry#" << i
+      << " storage_code=" << storage_id;
     const NDArray& src = data_pool_.at(storage_id);
     data_entry_[i] = src.AsArray(vshape[i], vdtype[i]);
   }

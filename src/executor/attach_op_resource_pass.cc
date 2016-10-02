@@ -15,15 +15,21 @@ Graph AttachOpResources(Graph g) {
   auto& fresource =
       nnvm::Op::GetAttr<FResourceRequest>("FResourceRequest");
   auto& op_execs = nnvm::get<OpExecVector>(*g.attrs.at("op_execs"));
-  const auto& vctx = g.GetAttr<ContextVector>("context");
-  const auto& idx = g.indexed_graph();
+  const ContextVector& vctx = g.GetAttr<ContextVector>("context");
+  const nnvm::IndexedGraph& idx = g.indexed_graph();
   // Use global resource pool for each executor for now.
   std::map<Context, Resource> cached_temp;
   // Resource allocation
   for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
-    const auto& inode = idx[nid];
-    if (inode.source->is_variable()) continue;
-    if (fresource.count(inode.source->op()) == 0) continue;
+    const nnvm::IndexedGraph::Node& inode = idx[nid];
+    if (inode.source->is_variable()) {
+      // Do nothing for variable node.
+      continue;
+    }
+    if (fresource.count(inode.source->op()) == 0) {
+      // No resource is requested for this node.
+      continue;
+    }
     auto reqs = fresource[inode.source->op()](inode.source->attrs);
     auto& requested = op_execs[nid]->op_ctx.requested;
     requested.clear();
