@@ -10,12 +10,20 @@
 #include "./exec_pass.h"
 
 namespace mxnet {
-
 namespace op {
 const OperatorProperty* OpPropGetOpProperty(const NodeAttrs& attrs);
 }  // namespace op
 
 namespace exec {
+namespace {
+void DoNothingFCompute(const nnvm::NodeAttrs& attrs,
+                       const OpContext& ctx,
+                       const std::vector<TBlob>& inputs,
+                       const std::vector<OpReqType>& req,
+                       const std::vector<TBlob>& outputs) {
+  // DO nothing.
+}
+}  // namespace
 
 // forward executor
 class ForwardOpExecutor : public OpExecutor {
@@ -239,7 +247,9 @@ Graph AttachOpExecs(Graph g) {
       // function as executor.
       ret[nodeid] = std::make_shared<FComputeExecutor>(fcompute, inode.source->attrs);
     } else {
-      LOG(INFO) << "FCompute not registered " << inode.source->op()->name;
+      LOG(WARNING) << "FCompute not registered for node \""
+        << inode.source->op()->name << "\". DoNothingFCompute will be registered.";
+      ret[nodeid] = std::make_shared<FComputeExecutor>(DoNothingFCompute, NodeAttrs());
     }
   }
   g.attrs["op_execs"] = std::make_shared<nnvm::any>(ret);

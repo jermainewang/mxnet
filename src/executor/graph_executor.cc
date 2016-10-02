@@ -286,14 +286,15 @@ void GraphExecutor::Init(nnvm::Symbol symbol,
       output_arrays_.push_back(data_entry_[idx.entry_id(e)]);
     }
     // initialize head gradient array
-    head_grad_array_.resize(symbol.outputs.size());
-    for (size_t i = num_forward_inputs_; i < idx.input_nodes().size(); ++i) {
-      uint32_t nid = idx.input_nodes().at(i);
-      uint32_t oid = head_grad_map_.at(idx[nid].source);
-      head_grad_array_[oid] = data_entry_[idx.entry_id(nid, 0)];
+    for (const auto& kv : head_grad_map_) {
+      const nnvm::Node* head_grad_node = kv.first;
+      const uint32_t nid = idx.node_id(head_grad_node);
+      head_grad_array_.push_back(data_entry_[idx.entry_id(nid, 0)]);
     }
   }
-  this->InitCachedOps();
+  LOG(INFO) << "Finished initialize output and head gradient arrays.";
+  InitCachedOps();
+  LOG(INFO) << "Finished initialize engine operators for execution.";
 }
 
 Graph GraphExecutor::InferShapeType(
@@ -544,9 +545,13 @@ void GraphExecutor::InitCachedOps() {
   // setup the array and requirements.
   for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
     const auto& inode = idx[nid];
-    if (inode.source->is_variable()) continue;
+    if (inode.source->is_variable()) {
+      // Nothing to be done for variable.
+      continue;
+    }
     op_nodes_[nid].exec = op_execs[nid];
     op_nodes_[nid].ctx = vctx[nid];
+    CHECK_NOTNULL(op_nodes_[nid].exec);
     auto& exec = op_nodes_[nid].exec;
     CHECK_EQ(exec->in_array.size(), 0);
     CHECK_EQ(exec->out_array.size(), 0);
