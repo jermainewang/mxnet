@@ -391,8 +391,8 @@ Graph GraphExecutor::InitGraph(nnvm::Symbol symbol,
   g = nnvm::ApplyPass(g, "PartitionPass");
   std::map<std::string, Context> group_contexts;
   for (size_t i = 0; i < 2; ++i) {
-    //group_contexts["group:" + std::to_string(i)] = Context::GPU(i);
-    group_contexts["group:" + std::to_string(i)] = Context::CPU();
+    group_contexts["group:" + std::to_string(i)] = Context::GPU(i);
+    //group_contexts["group:" + std::to_string(i)] = Context::CPU();
   }
   g = AssignContext(g, default_ctx, group_contexts,
                     in_args,
@@ -580,6 +580,7 @@ void GraphExecutor::InitCachedOps() {
 
   for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
     const auto& inode = idx[nid];
+    const std::string& node_name = inode.source->attrs.name;
     if (inode.source->is_variable()) continue;
     auto& exec = op_nodes_[nid].exec;
 
@@ -611,6 +612,18 @@ void GraphExecutor::InitCachedOps() {
       all_vars.push_back(nd.var());
       mutate_vars.push_back(nd.var());
     }
+    // Handle control dependencies.
+    for (nnvm::NodePtr depend_node : inode.source->control_deps) {
+      // Put the first output of the depend_node in use_vars.
+      const uint32_t depend_nid = idx.node_id(depend_node.get());
+      CHECK_LT(depend_nid, nid);
+      CHECK_GT(depend_node->num_outputs(), 0);
+      const uint32_t entid = idx.entry_id(depend_nid, 0);
+      LOG(INFO) << "Node #" << nid << " depend on entry #" << entid << " from node #" << depend_nid;
+      const NDArray& nd = data_entry_[entid];
+      all_vars.push_back(nd.var());
+      use_vars.push_back(nd.var());
+    }
     auto dedup = [] (std::vector<Engine::VarHandle>& vars) {  // NOLINT(*)
       std::sort(vars.begin(), vars.end());
       vars.resize(std::unique(vars.begin(), vars.end()) - vars.begin());
@@ -623,11 +636,12 @@ void GraphExecutor::InitCachedOps() {
         exec->Setup();
       }, Context::CPU(), {}, all_vars);
 
-    auto exec_fun = [exec, is_async, is_gpu](
+    auto exec_fun = [exec, is_async, is_gpu, nid, node_name](
         RunContext ctx, Engine::CallbackOnComplete on_complete) {
       if (is_async) {
         exec->op_ctx.async_on_complete = on_complete;
       }
+      LOG(INFO) << "Execute Node #" << nid << ": " << node_name;
       exec->Run(ctx);
       // call on complete only if it is async op
       if (!is_async) {
@@ -643,7 +657,7 @@ void GraphExecutor::InitCachedOps() {
       }
     };
     // setup the vars
-    op_nodes_[nid].cached_opr =  Engine::Get()->NewOperator(
+    op_nodes_[nid].cached_opr = Engine::Get()->NewOperator(
         exec_fun, use_vars, mutate_vars, FnProperty::kNormal);
   }
 }
@@ -655,6 +669,7 @@ void GraphExecutor::RunOps(bool is_train, size_t topo_start, size_t topo_end) {
   for (size_t nid = topo_start; nid < topo_end; ++nid) {
     const auto& inode = idx[nid];
     if (inode.source->is_variable()) continue;
+    LOG(INFO) << "Push node#" << nid << ": " << inode.source->attrs.name;
     OpNode& opnode = op_nodes_[nid];
     opnode.exec->op_ctx.is_train = is_train;
     if (opnode.exec->exec_type() == Operator::kCrossDeviceCopy) {

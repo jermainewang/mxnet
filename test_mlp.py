@@ -8,7 +8,7 @@ import pickle as pickle
 import logging
 
 # symbol net
-batch_size = 32
+batch_size = 128
 hidden_size = 32
 input_size = hidden_size
 out_size = hidden_size
@@ -37,16 +37,16 @@ def test_mlp():
     arg_types, out_types, aux_types = net.infer_type(data=mx.base.mx_real_t)
 
     # create ndarrays for all arguments.
-    arg_arrays = [mx.nd.zeros(shape, mx.cpu(0), dtype=dtype)
+    arg_arrays = [mx.nd.zeros(shape, mx.gpu(0), dtype=dtype)
                   for shape, dtype in zip(arg_shapes, arg_types)]
     print('Num arguments: ', len(arg_arrays))
     # create gradient ndarray for all parameters.
-    grad_dict = {name : mx.nd.zeros(shape, mx.cpu(0), dtype=dtype)
+    grad_dict = {name : mx.nd.zeros(shape, mx.gpu(0), dtype=dtype)
                  for name, shape, dtype in zip(net.list_arguments(), arg_shapes, arg_types)
                  if name != 'data'}
     print('Argument grads: ', grad_dict.keys())
 
-    executor = net.bind(ctx=mx.cpu(0),
+    executor = net.bind(ctx=mx.gpu(0),
                         args=arg_arrays,
                         args_grad=grad_dict,
                         grad_req='write')
