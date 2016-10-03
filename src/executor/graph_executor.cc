@@ -14,6 +14,12 @@
 
 namespace mxnet {
 namespace exec {
+namespace {
+void SortAndUnique(std::vector<Engine::VarHandle>* vars) {
+  std::sort(vars->begin(), vars->end());
+  vars->resize(std::unique(vars->begin(), vars->end()) - vars->begin());
+};
+}  // namespace
 GraphExecutor::~GraphExecutor() {
   for (auto& n : op_nodes_) {
     if (n.cached_opr != nullptr) {
@@ -383,17 +389,20 @@ Graph GraphExecutor::InitGraph(nnvm::Symbol symbol,
   // other initializations
   g = nnvm::pass::InferShape(g, arg_shapes, "__shape__");
   g = nnvm::pass::InferType(g, arg_types);
-  g = nnvm::ApplyPass(g, "PlanMemory");*/
+  g = nnvm::ApplyPass(g, "PlanMemory");
+  return g;*/
 
   // setup gradient
   nnvm::Graph g = InitFullGraph(symbol, grad_req_type, arg_grad_store);
   g = InferShapeType(g, in_args, aux_states);
   g = nnvm::ApplyPass(g, "PartitionPass");
   std::map<std::string, Context> group_contexts;
-  for (size_t i = 0; i < 2; ++i) {
-    group_contexts["group:" + std::to_string(i)] = Context::GPU(i);
+  group_contexts["group:0"] = Context::CPU();
+  group_contexts["group:1"] = Context::GPU(0);
+  //for (size_t i = 0; i < 2; ++i) {
+    //group_contexts["group:" + std::to_string(i)] = Context::GPU(i);
     //group_contexts["group:" + std::to_string(i)] = Context::CPU();
-  }
+  //}
   g = AssignContext(g, default_ctx, group_contexts,
                     in_args,
                     grad_store_,
@@ -578,59 +587,85 @@ void GraphExecutor::InitCachedOps() {
         grad_store_[j - num_forward_outputs_].first;
   }
 
+  // A vector that contains special variables used to indicate the accomplishment
+  // of each operator. This variable will be used as control dependency.
+  std::vector<Engine::VarHandle> finish_vars(idx.num_nodes());
   for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
     const auto& inode = idx[nid];
     const std::string& node_name = inode.source->attrs.name;
-    if (inode.source->is_variable()) continue;
-    auto& exec = op_nodes_[nid].exec;
+    // Create finish variable.
+    finish_vars[nid] = Engine::Get()->NewVariable();
+    if (inode.source->is_variable()) {
+      // Nothing more to do with variable node.
+      continue;
+    }
 
+    auto& exec = op_nodes_[nid].exec;
     std::vector<uint32_t> inplace_inputs;
     for (uint32_t index = 0; index < inode.source->num_outputs(); ++index) {
-      uint32_t eid = idx.entry_id(nid, index);
-      if (vstorage_inplace[eid] >= 0 && exec->req.at(index) == kWriteInplace) {
+      const uint32_t eid = idx.entry_id(nid, index);
+      if (vstorage_inplace[eid] >= 0 && exec->req[index] == kWriteInplace) {
         inplace_inputs.push_back(vstorage_inplace[eid]);
       }
     }
     std::sort(inplace_inputs.begin(), inplace_inputs.end());
 
-    bool is_async = op_nodes_[nid].exec->exec_type() == Operator::kAsync;
-    bool is_gpu = op_nodes_[nid].ctx.dev_mask() == gpu::kDevMask;
-    // the variable
-    std::vector<Engine::VarHandle> use_vars, mutate_vars, all_vars;
+    const bool is_async = op_nodes_[nid].exec->exec_type() == Operator::kAsync;
+    const bool is_gpu = op_nodes_[nid].ctx.dev_mask() == gpu::kDevMask;
+
+    std::vector<Engine::VarHandle> use_vars, mutate_vars;
+    // Use variables include:
+    // - Variables of input arrays. Note that the input array that has the same
+    //   storage id (could be computed inplacely) will not be put in the use_vars.
+    // - Finish varaibles of control dependencies.
     for (size_t i = 0; i < exec->in_array.size(); ++i) {
       if (!std::binary_search(inplace_inputs.begin(), inplace_inputs.end(), i)) {
         auto& nd = exec->in_array[i];
-        all_vars.push_back(nd.var());
         use_vars.push_back(nd.var());
       }
-    }
-    for (auto& r : exec->op_ctx.requested) {
-      all_vars.push_back(r.var);
-      mutate_vars.push_back(r.var);
-    }
-    for (auto& nd : exec->out_array) {
-      all_vars.push_back(nd.var());
-      mutate_vars.push_back(nd.var());
     }
     // Handle control dependencies.
     for (nnvm::NodePtr depend_node : inode.source->control_deps) {
       // Put the first output of the depend_node in use_vars.
       const uint32_t depend_nid = idx.node_id(depend_node.get());
       CHECK_LT(depend_nid, nid);
-      CHECK_GT(depend_node->num_outputs(), 0);
-      const uint32_t entid = idx.entry_id(depend_nid, 0);
-      LOG(INFO) << "Node #" << nid << " depend on entry #" << entid << " from node #" << depend_nid;
-      const NDArray& nd = data_entry_[entid];
-      all_vars.push_back(nd.var());
-      use_vars.push_back(nd.var());
+      use_vars.push_back(finish_vars[depend_nid]);
     }
-    auto dedup = [] (std::vector<Engine::VarHandle>& vars) {  // NOLINT(*)
-      std::sort(vars.begin(), vars.end());
-      vars.resize(std::unique(vars.begin(), vars.end()) - vars.begin());
-    };
-    dedup(use_vars);
-    dedup(mutate_vars);
-    dedup(all_vars);
+    // Mutate variables include:
+    // - Auxiliary states used by the operator.
+    // - Output arrays.
+    // - Finish variable.
+    for (auto& r : exec->op_ctx.requested) {
+      mutate_vars.push_back(r.var);
+    }
+    for (size_t idx = 0; idx < inode.source->num_outputs(); ++idx) {
+      if (exec->req[idx] != kNullOp) {
+        mutate_vars.push_back(exec->out_array[idx].var());
+      }
+    }
+    mutate_vars.push_back(finish_vars[nid]);
+
+    /*std::ostringstream oss;
+    oss << "Node #" << nid << "(" << node_name << ") Use: [";
+    for (const auto& v : use_vars) {
+      oss << v << " ";
+    }
+    oss << "] Mutate: [";
+    for (const auto& v : mutate_vars) {
+      oss << v << " ";
+    }
+    oss << "]";
+    LOG(INFO) << oss.str();*/
+
+    // Sort and make the vars unique.
+    std::vector<Engine::VarHandle> all_vars = use_vars;
+    all_vars.insert(all_vars.end(), mutate_vars.begin(), mutate_vars.end());
+    SortAndUnique(&use_vars);
+    SortAndUnique(&mutate_vars);
+    SortAndUnique(&all_vars);
+    CHECK_EQ(use_vars.size() + mutate_vars.size(), all_vars.size())
+      << "Variable should not both used and mutated in one operator."
+      << " This will cause deadlock during execution.";
 
     Engine::Get()->PushSync([exec](RunContext rctx) {
         exec->Setup();
@@ -641,7 +676,7 @@ void GraphExecutor::InitCachedOps() {
       if (is_async) {
         exec->op_ctx.async_on_complete = on_complete;
       }
-      LOG(INFO) << "Execute Node #" << nid << ": " << node_name;
+      //LOG(INFO) << "Execute Node #" << nid << ": " << node_name;
       exec->Run(ctx);
       // call on complete only if it is async op
       if (!is_async) {
@@ -669,7 +704,6 @@ void GraphExecutor::RunOps(bool is_train, size_t topo_start, size_t topo_end) {
   for (size_t nid = topo_start; nid < topo_end; ++nid) {
     const auto& inode = idx[nid];
     if (inode.source->is_variable()) continue;
-    LOG(INFO) << "Push node#" << nid << ": " << inode.source->attrs.name;
     OpNode& opnode = op_nodes_[nid];
     opnode.exec->op_ctx.is_train = is_train;
     if (opnode.exec->exec_type() == Operator::kCrossDeviceCopy) {

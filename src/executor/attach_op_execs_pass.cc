@@ -225,7 +225,7 @@ Graph AttachOpExecs(Graph g) {
         // the backward operator is specially generated.
         // First create the layer operator. FIXME: The input shape and dtype are
         // inferred from the output of the backward op.
-        const nnvm::Op* fwdop = bwdop2fwdop[op];
+        /*const nnvm::Op* fwdop = bwdop2fwdop[op];
         CHECK_NE(fcreate_layer_op.count(fwdop), 0);
         ShapeVector ishape;
         DTypeVector itype;
@@ -240,7 +240,11 @@ Graph AttachOpExecs(Graph g) {
         ret[nodeid] = std::make_shared<BackwardOpExecutor>(
             layer_op,
             mxnet::op::OpPropGetOpProperty(inode.source->attrs),
-            mutate_index);
+            mutate_index);*/
+        // Create FCompute for this:
+        LOG(WARNING) << "Current workaround for node \""
+          << inode.source->op()->name << "\". DoNothing.";
+        ret[nodeid] = std::make_shared<FComputeExecutor>(DoNothingFCompute, inode.source->attrs);
       }
     } else if (fcompute != nullptr) {
       // Not forward layer op or backward layer op. Just use the registered compute
