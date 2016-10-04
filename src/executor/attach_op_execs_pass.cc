@@ -199,6 +199,26 @@ Graph AttachOpExecs(Graph g) {
       mutate_index = fmutate_inputs[op](inode.source->attrs);
     }
     const FCompute fcompute = FComputeExecutor::GetFCompute(op, vctx[nodeid]);
+
+    /*if (inode.source->attrs.dict.count("ctx_group") != 0) {
+      if (inode.source->attrs.dict.at("ctx_group") != "group:0") {
+        LOG(WARNING) << "--------->\""
+          << inode.source->op()->name << "\". DoNothing.";
+        ret[nodeid] = std::make_shared<FComputeExecutor>(DoNothingFCompute, inode.source->attrs);
+        continue;
+      }
+    }*/
+
+    /*if (op->name == "_CrossDeviceCopy"
+        //|| op->name == "FullyConnected"
+        //|| op->name == "ElementWiseSum" || op->name == "Concat" || op->name == "_backward_FullyConnected"
+        ) {
+      LOG(WARNING) << "==========>\""
+        << inode.source->op()->name << "\". DoNothing.";
+      ret[nodeid] = std::make_shared<FComputeExecutor>(DoNothingFCompute, inode.source->attrs);
+      continue;
+    }*/
+
     if (fcreate_layer_op.count(op)) {
       ShapeVector ishape;
       DTypeVector itype;

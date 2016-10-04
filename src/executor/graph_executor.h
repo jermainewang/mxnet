@@ -17,6 +17,8 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <mutex>
+#include <thread>
 #include "./exec_pass.h"
 
 namespace mxnet {
@@ -104,6 +106,10 @@ class GraphExecutor : public Executor {
   size_t num_forward_nodes_{0};
   // monitor call back
   std::function<void(const char*, void*)> monitor_callback_{nullptr};
+
+  typedef std::tuple<std::string, double, double> TraceRecord;
+  std::mutex trace_mutex_;
+  std::shared_ptr<std::vector<TraceRecord>> trace_records_;
 };
 
 }  // namespace exec

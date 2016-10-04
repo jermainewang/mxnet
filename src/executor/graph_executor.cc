@@ -8,6 +8,8 @@
 #include <nnvm/pass_functions.h>
 #include <vector>
 #include <algorithm>
+#include <sys/time.h>
+#include <fstream>
 
 #include "./exec_pass.h"
 #include "./graph_executor.h"
@@ -29,6 +31,14 @@ GraphExecutor::~GraphExecutor() {
 }
 
 void GraphExecutor::Forward(bool is_train) {
+//  static int calls = 0;
+//  std::ofstream fout("trace_" + std::to_string(calls) + ".txt");
+//  for (const auto& rec : *trace_records_) {
+//    fout << std::get<0>(rec) << " " << std::get<1>(rec)
+//      << " " << std::get<2>(rec) << std::endl;
+//  }
+//  ++calls;
+//  trace_records_->clear();
   RunOps(is_train, 0, num_forward_nodes_);
 }
 
@@ -395,14 +405,24 @@ Graph GraphExecutor::InitGraph(nnvm::Symbol symbol,
   // setup gradient
   nnvm::Graph g = InitFullGraph(symbol, grad_req_type, arg_grad_store);
   g = InferShapeType(g, in_args, aux_states);
-  g = nnvm::ApplyPass(g, "PartitionPass");
+  int num_gpus = 1;
+  std::string num_gpus_attrs;
+  if (symbol.GetAttr("num_gpus", &num_gpus_attrs)) {
+    num_gpus = std::stoi(num_gpus_attrs);
+  }
+  LOG(INFO) << "Num GPUs: " << num_gpus;
   std::map<std::string, Context> group_contexts;
-  group_contexts["group:0"] = Context::CPU();
-  group_contexts["group:1"] = Context::GPU(0);
-  //for (size_t i = 0; i < 2; ++i) {
-    //group_contexts["group:" + std::to_string(i)] = Context::GPU(i);
-    //group_contexts["group:" + std::to_string(i)] = Context::CPU();
-  //}
+  if (num_gpus > 1) {
+    g.attrs["num_devices"] = std::make_shared<nnvm::any>(num_gpus);
+    g = nnvm::ApplyPass(g, "PartitionPass");
+    //group_contexts["group:0"] = Context::CPU();
+    //group_contexts["group:1"] = Context::GPU(0);
+    for (int i = 0; i < num_gpus; ++i) {
+      group_contexts["group:" + std::to_string(i)] = Context::GPU(i);
+    }
+  } else {
+    group_contexts = ctx_map;
+  }
   g = AssignContext(g, default_ctx, group_contexts,
                     in_args,
                     grad_store_,
@@ -645,18 +665,6 @@ void GraphExecutor::InitCachedOps() {
     }
     mutate_vars.push_back(finish_vars[nid]);
 
-    /*std::ostringstream oss;
-    oss << "Node #" << nid << "(" << node_name << ") Use: [";
-    for (const auto& v : use_vars) {
-      oss << v << " ";
-    }
-    oss << "] Mutate: [";
-    for (const auto& v : mutate_vars) {
-      oss << v << " ";
-    }
-    oss << "]";
-    LOG(INFO) << oss.str();*/
-
     // Sort and make the vars unique.
     std::vector<Engine::VarHandle> all_vars = use_vars;
     all_vars.insert(all_vars.end(), mutate_vars.begin(), mutate_vars.end());
@@ -671,12 +679,17 @@ void GraphExecutor::InitCachedOps() {
         exec->Setup();
       }, Context::CPU(), {}, all_vars);
 
-    auto exec_fun = [exec, is_async, is_gpu, nid, node_name](
+    trace_records_ = std::shared_ptr<std::vector<TraceRecord>>(new std::vector<TraceRecord>());
+
+    auto exec_fun = [exec, is_async, is_gpu, nid, node_name, this](
         RunContext ctx, Engine::CallbackOnComplete on_complete) {
       if (is_async) {
         exec->op_ctx.async_on_complete = on_complete;
       }
-      //LOG(INFO) << "Execute Node #" << nid << ": " << node_name;
+
+      //struct timeval st, ed;
+      //gettimeofday(&st, nullptr);
+
       exec->Run(ctx);
       // call on complete only if it is async op
       if (!is_async) {
@@ -689,7 +702,16 @@ void GraphExecutor::InitCachedOps() {
         #endif
         }
         on_complete();
+      } else {
+        LOG(INFO) << "Async !!!!";
       }
+
+      //gettimeofday(&ed, nullptr);
+      //TraceRecord rec = std::make_tuple(node_name, st.tv_usec / 1000.0, ed.tv_usec / 1000.0);
+      //{
+        //std::lock_guard<std::mutex> guard(trace_mutex_);
+        //trace_records_->push_back(rec);
+      //}
     };
     // setup the vars
     op_nodes_[nid].cached_opr = Engine::Get()->NewOperator(
@@ -703,6 +725,7 @@ void GraphExecutor::RunOps(bool is_train, size_t topo_start, size_t topo_end) {
   const auto& idx = graph_.indexed_graph();
   for (size_t nid = topo_start; nid < topo_end; ++nid) {
     const auto& inode = idx[nid];
+    //LOG(INFO) << "Push node #" << nid << " " << inode.source->attrs.name;
     if (inode.source->is_variable()) continue;
     OpNode& opnode = op_nodes_[nid];
     opnode.exec->op_ctx.is_train = is_train;

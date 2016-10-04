@@ -58,9 +58,11 @@ class OpPartitioner {
       const vector<TShape>& output_shapes,
       const vector<Scheme*>& input_schemes,
       const vector<Scheme*>& output_schemes) = 0;
-  virtual vector<NodeAttrs> AttrsPartition(size_t num_partitions) = 0;
+  virtual void AttrsPartition(const NodeAttrs& attrs, size_t num_partitions) = 0;
+
+  const NodeAttrs& attrs() const { return attrs_; }
  protected:
-  const NodeAttrs& attrs_;
+  NodeAttrs attrs_;
 };
 
 template<typename ParamType>
@@ -76,7 +78,7 @@ class ForwardOpPartitioner : public OpPartitioner {
       const vector<TShape>& out_data_shapes,
       const vector<Scheme*>& in_data_schemes,
       const vector<Scheme*>& out_data_schemes) = 0;
-  virtual vector<ParamType> Partition(const ParamType&, size_t num_partitions) = 0;
+  virtual void Partition(size_t num_partitions) = 0;
   void AttrsAlignedScheme(
       const vector<TShape>& input_shapes,
       const vector<TShape>& output_shapes,
@@ -88,21 +90,17 @@ class ForwardOpPartitioner : public OpPartitioner {
                         input_schemes,
                         output_schemes);
   }
-  vector<NodeAttrs> AttrsPartition(size_t num_partitions) override {
-    const vector<ParamType>& params = this->Partition(param_, num_partitions);
-    vector<NodeAttrs> ret;
+  void AttrsPartition(const NodeAttrs& attrs, size_t num_partitions) override {
+    attrs_ = attrs;
     CHECK_EQ(attrs_.scalars.size(), 0)
       << "Cannot have positional attributes";
-    for (const ParamType& p : params) {
-      NodeAttrs a;
-      a.op = attrs_.op;
-      for (const auto kv : p.__DICT__()) {
-        a.dict[kv.first] = kv.second;
-      }
-      ret.push_back(a);
+    vector<pair<string, string> > kwargs(attrs_.dict.begin(), attrs_.dict.end());
+    param_.Init(kwargs);
+    this->Partition(num_partitions);
+    // Update attributes.
+    for (const auto kv : param_.__DICT__()) {
+      attrs_.dict[kv.first] = kv.second;
     }
-    // TODO(minjie): how about `attrs_.parsed`?
-    return ret;
   }
  protected:
   ParamType param_;
@@ -125,7 +123,7 @@ class BackwardOpPartitioner : public OpPartitioner {
       const vector<Scheme*>& in_data_schemes,
       const vector<Scheme*>& out_data_schemes,
       const vector<Scheme*>& in_grad_schemes) = 0;
-  virtual vector<ParamType> Partition(const ParamType&, size_t num_partitions) = 0;
+  virtual void Partition(size_t num_partitions) = 0;
   void AttrsAlignedScheme(
       const vector<TShape>& input_shapes,
       const vector<TShape>& output_shapes,
@@ -153,21 +151,17 @@ class BackwardOpPartitioner : public OpPartitioner {
                         out_data_schemes,
                         output_schemes);
   }
-  vector<NodeAttrs> AttrsPartition(size_t num_partitions) override {
-    const vector<ParamType>& params = this->Partition(param_, num_partitions);
-    vector<NodeAttrs> ret;
+  void AttrsPartition(const NodeAttrs& attrs, size_t num_partitions) override {
+    attrs_ = attrs;
     CHECK_EQ(attrs_.scalars.size(), 0)
       << "Cannot have positional attributes";
-    for (const ParamType& p : params) {
-      NodeAttrs a;
-      a.op = attrs_.op;
-      for (const auto kv : p.__DICT__()) {
-        a.dict[kv.first] = kv.second;
-      }
-      ret.push_back(a);
+    vector<pair<string, string> > kwargs(attrs_.dict.begin(), attrs_.dict.end());
+    param_.Init(kwargs);
+    this->Partition(num_partitions);
+    // Update attributes.
+    for (const auto kv : param_.__DICT__()) {
+      attrs_.dict[kv.first] = kv.second;
     }
-    // TODO(minjie): how about `attrs_.parsed`?
-    return ret;
   }
  protected:
   ParamType param_;
@@ -175,9 +169,9 @@ class BackwardOpPartitioner : public OpPartitioner {
 
 ///////////////////////////////////////////////////////////////////////////
 // Return node attributes that are exactly the same as the given one.
-vector<NodeAttrs> IdenticalPartition(const NodeAttrs& attrs,
-                                     size_t num_partitions) {
-  return vector<NodeAttrs>(num_partitions, attrs);
+NodeAttrs IdenticalPartition(const NodeAttrs& attrs,
+                            size_t num_partitions) {
+  return attrs;
 }
 
 template<size_t K>
@@ -258,12 +252,8 @@ class FCForwardPartitioner1 : public ForwardOpPartitioner<FullyConnectedParam> {
       *in_data_schemes[fullc::kBias] = Scheme::Rep(); // b: r
     }
   }
-  vector<FullyConnectedParam> Partition(
-      const FullyConnectedParam& param, size_t num_partitions) override {
-    FullyConnectedParam p;
-    p.no_bias = param_.no_bias;
-    p.num_hidden = param_.num_hidden;
-    return vector<FullyConnectedParam>(num_partitions, p);
+  void Partition(size_t num_partitions) override {
+    // Do nothing.
   }
 };
 class FCForwardPartitioner2 : public ForwardOpPartitioner<FullyConnectedParam> {
@@ -291,13 +281,9 @@ class FCForwardPartitioner2 : public ForwardOpPartitioner<FullyConnectedParam> {
       *in_data_schemes[fullc::kBias] = Scheme::Cut(0); // b: R
     }
   }
-  vector<FullyConnectedParam> Partition(
-      const FullyConnectedParam& param, size_t num_partitions) override {
+  void Partition(size_t num_partitions) override {
     CHECK(param_.num_hidden % num_partitions == 0);
-    FullyConnectedParam p;
-    p.no_bias = param_.no_bias;
-    p.num_hidden = param_.num_hidden / num_partitions;
-    return vector<FullyConnectedParam>(num_partitions, p);
+    param_.num_hidden /= num_partitions;
   }
 };
 class FCForwardPartitioner3 : public ForwardOpPartitioner<FullyConnectedParam> {
@@ -325,12 +311,8 @@ class FCForwardPartitioner3 : public ForwardOpPartitioner<FullyConnectedParam> {
       *in_data_schemes[fullc::kBias] = Scheme::Rep();  // b: r
     }
   }
-  vector<FullyConnectedParam> Partition(
-      const FullyConnectedParam& param, size_t num_partitions) override {
-    FullyConnectedParam p;
-    p.no_bias = param_.no_bias;
-    p.num_hidden = param_.num_hidden;
-    return vector<FullyConnectedParam>(num_partitions, p);
+  void Partition(size_t num_partitions) override {
+    // Do nothing.
   }
 };
 // Two matmults in the backward propagation:
@@ -364,13 +346,9 @@ class FCBackwardPartitioner1 : public BackwardOpPartitioner<FullyConnectedParam>
       *in_grad_schemes[fullc::kBias] = Scheme::Cut(0); // db: R
     }
   }
-  vector<FullyConnectedParam> Partition(
-      const FullyConnectedParam&, size_t num_partitions) {
+  void Partition(size_t num_partitions) {
     CHECK(param_.num_hidden % num_partitions == 0);
-    FullyConnectedParam p;
-    p.no_bias = param_.no_bias;
-    p.num_hidden = param_.num_hidden / num_partitions;
-    return vector<FullyConnectedParam>(num_partitions, p);
+    param_.num_hidden /= num_partitions;
   }
 };
 class FCBackwardPartitioner2 : public BackwardOpPartitioner<FullyConnectedParam> {
@@ -396,12 +374,8 @@ class FCBackwardPartitioner2 : public BackwardOpPartitioner<FullyConnectedParam>
       *in_grad_schemes[fullc::kBias] = Scheme::Rep();  // db: r
     }
   }
-  vector<FullyConnectedParam> Partition(
-      const FullyConnectedParam&, size_t num_partitions) {
-    FullyConnectedParam p;
-    p.no_bias = param_.no_bias;
-    p.num_hidden = param_.num_hidden;
-    return vector<FullyConnectedParam>(num_partitions, p);
+  void Partition(size_t num_partitions) {
+    // Do nothing.
   }
 };
 class FCBackwardPartitioner3 : public BackwardOpPartitioner<FullyConnectedParam> {
@@ -427,12 +401,8 @@ class FCBackwardPartitioner3 : public BackwardOpPartitioner<FullyConnectedParam>
       *in_grad_schemes[fullc::kBias] = Scheme::Red(); // db: red
     }
   }
-  vector<FullyConnectedParam> Partition(
-      const FullyConnectedParam&, size_t num_partitions) {
-    FullyConnectedParam p;
-    p.no_bias = param_.no_bias;
-    p.num_hidden = param_.num_hidden;
-    return vector<FullyConnectedParam>(num_partitions, p);
+  void Partition(size_t num_partitions) {
+    // Do nothing.
   }
 };
 ///////////////////////////////////////////////////////////////////////////////////
@@ -466,10 +436,9 @@ class ConvForwardPartitioner1 : public ForwardOpPartitioner<ConvolutionParam> {
       *in_data_schemes[conv::kBias] = Scheme::Rep(); // b: r
     }
   }
-  vector<ConvolutionParam> Partition(
-      const ConvolutionParam& param, size_t num_partitions) override {
+  void Partition(size_t num_partitions) override {
     CHECK_EQ(param_.num_group, 1);
-    return vector<ConvolutionParam>(num_partitions, param_);
+    // Do nothing.
   }
 };
 class ConvForwardPartitioner2 : public ForwardOpPartitioner<ConvolutionParam> {
@@ -489,13 +458,10 @@ class ConvForwardPartitioner2 : public ForwardOpPartitioner<ConvolutionParam> {
       *in_data_schemes[conv::kBias] = Scheme::Cut(0); // b: R
     }
   }
-  vector<ConvolutionParam> Partition(
-      const ConvolutionParam& param, size_t num_partitions) override {
+  void Partition(size_t num_partitions) override {
     CHECK_EQ(param_.num_group, 1);
     CHECK_EQ(param_.num_filter % num_partitions, 0);
-    ConvolutionParam p = param_;
-    p.num_filter /= num_partitions;
-    return vector<ConvolutionParam>(num_partitions, p);
+    param_.num_filter /= num_partitions;
   }
 };
 class ConvForwardPartitioner3 : public ForwardOpPartitioner<ConvolutionParam> {
@@ -515,10 +481,9 @@ class ConvForwardPartitioner3 : public ForwardOpPartitioner<ConvolutionParam> {
       *in_data_schemes[conv::kBias] = Scheme::Rep();  // b: r
     }
   }
-  vector<ConvolutionParam> Partition(
-      const ConvolutionParam& param, size_t num_partitions) override {
+  void Partition(size_t num_partitions) override {
     CHECK_EQ(param_.num_group, 1);
-    return vector<ConvolutionParam>(num_partitions, param_);
+    // Do nothing.
   }
 };
 // Data format NCHW
@@ -554,13 +519,10 @@ class ConvBackwardPartitioner1 : public BackwardOpPartitioner<ConvolutionParam> 
       *in_grad_schemes[conv::kBias] = Scheme::Cut(0); // db: R
     }
   }
-  vector<ConvolutionParam> Partition(
-      const ConvolutionParam&, size_t num_partitions) {
+  void Partition(size_t num_partitions) {
     CHECK_EQ(param_.num_group, 1);
     CHECK_EQ(param_.num_filter % num_partitions, 0);
-    ConvolutionParam p = param_;
-    p.num_filter /= num_partitions;
-    return vector<ConvolutionParam>(num_partitions, p);
+    param_.num_filter /= num_partitions;
   }
 };
 class ConvBackwardPartitioner2 : public BackwardOpPartitioner<ConvolutionParam> {
@@ -586,10 +548,8 @@ class ConvBackwardPartitioner2 : public BackwardOpPartitioner<ConvolutionParam> 
       *in_grad_schemes[conv::kBias] = Scheme::Rep();  // db: r
     }
   }
-  vector<ConvolutionParam> Partition(
-      const ConvolutionParam&, size_t num_partitions) {
+  void Partition(size_t num_partitions) {
     CHECK_EQ(param_.num_group, 1);
-    return vector<ConvolutionParam>(num_partitions, param_);
   }
 };
 class ConvBackwardPartitioner3 : public BackwardOpPartitioner<ConvolutionParam> {
@@ -615,10 +575,8 @@ class ConvBackwardPartitioner3 : public BackwardOpPartitioner<ConvolutionParam> 
       *in_grad_schemes[conv::kBias] = Scheme::Red(); // db: red
     }
   }
-  vector<ConvolutionParam> Partition(
-      const ConvolutionParam&, size_t num_partitions) {
+  void Partition(size_t num_partitions) {
     CHECK_EQ(param_.num_group, 1);
-    return vector<ConvolutionParam>(num_partitions, param_);
   }
 };
 
@@ -633,15 +591,16 @@ vector<SchemeRequest> MakeSchemeRequest(
     req.input_schemes.resize(input_shapes.size());
     req.output_schemes.resize(output_shapes.size());
     vector<Scheme*> is_ptr(input_shapes.size()), os_ptr(output_shapes.size());
-    for (int i = 0; i < input_shapes.size(); ++i) {
+    for (size_t i = 0; i < input_shapes.size(); ++i) {
       is_ptr[i] = &req.input_schemes[i];
     }
-    for (int i = 0; i < output_shapes.size(); ++i) {
+    for (size_t i = 0; i < output_shapes.size(); ++i) {
       os_ptr[i] = &req.output_schemes[i];
     }
     pttn->AttrsAlignedScheme(input_shapes, output_shapes, is_ptr, os_ptr);
-    req.partitioner = [pttn](const NodeAttrs& , size_t n) {
-      return pttn->AttrsPartition(n);
+    req.partitioner = [pttn](const NodeAttrs& attrs, size_t n) {
+      pttn->AttrsPartition(attrs, n);
+      return pttn->attrs();
     };
     ret.push_back(std::move(req));
   }
