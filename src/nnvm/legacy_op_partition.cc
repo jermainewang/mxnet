@@ -198,7 +198,7 @@ vector<SchemeRequest> CutFirstKDimsSchemes(
 }
 
 vector<SchemeRequest> CutAllDimsSchemes(
-    const NodeAttrs&,
+    const NodeAttrs& attrs,
     const vector<TShape>& input_shapes,
     const vector<TShape>& output_shapes) {
   vector<SchemeRequest> reqs;

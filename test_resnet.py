@@ -7,13 +7,15 @@ import os, sys,time
 import pickle as pickle
 import logging
 import math
+import argparse
+
+num_loops = 50
+cold_skip = 10
 
 # symbol net
-batch_size = 64
-
 def ConvModule(net, num_filter, kernel, pad=(0, 0), stride=(1, 1), fix_gamma=False):
     net = mx.sym.Convolution(data=net, kernel=kernel,
-            stride=stride, pad=pad, num_filter=num_filter)
+            stride=stride, pad=pad, num_filter=num_filter, no_bias=True)
     #net = mx.sym.BatchNorm(data=net, fix_gamma=fix_gamma)
     net = mx.sym.Activation(data=net, act_type="relu") # same memory to our act, less than CuDNN one
     return net
@@ -34,7 +36,8 @@ def ResModule(sym, base_filter, stage, layer, fix_gamma=False):
     force = layer % 2 == 1
     return sum_sym
 
-def get_symbol(layers=[3, 4, 6, 3]):
+# [3, 4, 6, 3]
+def get_symbol(args, layers=[3, 4, 6, 3]):
     """Get a 4-stage residual net, with configurations specified as layers.
 
     Parameters
@@ -53,17 +56,23 @@ def get_symbol(layers=[3, 4, 6, 3]):
     net = mx.symbol.Pooling(data=net, kernel=(7, 7), stride=(1, 1),
             name="globalpool", pool_type='avg')
     net = mx.symbol.Flatten(data=net, name='flatten')
-    net = mx.symbol.FullyConnected(data=net, num_hidden=1000, name='fc1')
+    net = mx.symbol.FullyConnected(data=net, num_hidden=1000, \
+            name='fc1', no_bias=True, attr={'num_gpus' : str(args.num_gpus)})
     # TODO(minjie): SoftmaxOutput
     #net = mx.symbol.SoftmaxOutput(data=fc1, name='softmax')
     #return net, [('data', (64, 3, 224, 224))], [('softmax_label', (64,))]
-    return net, [('data', (batch_size, 3, 224, 224))]
+    return net, [('data', (args.batch_size, 3, 224, 224))]
 
 def test_net():
     # print logging by default
     logging.basicConfig(level=logging.DEBUG)
 
-    net, data_shapes = get_symbol()
+    print(sys.argv)
+    parser = argparse.ArgumentParser("MLP single card code")
+    parser.add_argument('--batch_size', type=int, default=32, help='Batch size')
+    parser.add_argument('--num_gpus', type=int, default=2, help='Number of gpus')
+    args = parser.parse_args()
+    net, data_shapes = get_symbol(args)
 
     data_shapes = dict(data_shapes)
     data_types = {name: mx.base.mx_real_t for name, shp in data_shapes.items()}
@@ -91,17 +100,18 @@ def test_net():
                         grad_req='write')
 
     '''
-    for i in range(100):
-        if i == 10:
-            t0 = time.clock()
+    for i in range(num_loops):
+        print('=> loop %d' % i);
+        if i == cold_skip:
+            t0 = time.time()
         outputs = executor.forward()
         executor.backward([outputs[0]])
         for name, grad in grad_dict.items():
             grad.wait_to_read()
-    t1 = time.clock()
+    t1 = time.time()
 
     duration = t1 - t0
-    print('duration %f, speed %f' % (duration, float(duration) / 90))
+    print('duration %f, average %f' % (duration, float(duration) / (num_loops - cold_skip)))
     '''
 
 

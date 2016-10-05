@@ -6,10 +6,12 @@ import numpy as np
 import os, sys,time
 import pickle as pickle
 import logging
+import argparse
+
+num_loops = 50
+cold_skip = 10
 
 # symbol net
-batch_size = 128
-
 def conv_factory(data, num_filter, kernel, stride=(1, 1), pad=(1, 1), with_bn=False):
     net = mx.sym.Convolution(data,
                              num_filter=num_filter,
@@ -21,7 +23,7 @@ def conv_factory(data, num_filter, kernel, stride=(1, 1), pad=(1, 1), with_bn=Fa
     net = mx.sym.Activation(net, act_type="relu")
     return net
 
-def get_symbol():
+def get_symbol(args):
     net = mx.sym.Variable("data")
     # group 0
     net = conv_factory(net, num_filter=64, kernel=(11, 11), stride=(4, 4), pad=(2, 2))
@@ -44,15 +46,20 @@ def get_symbol():
     net = mx.sym.FullyConnected(net, num_hidden=4096)
     net = mx.sym.Activation(net, act_type="relu")
     # group 5
-    net = mx.sym.FullyConnected(net, num_hidden=1000)
+    net = mx.sym.FullyConnected(net, num_hidden=1000, attr={'num_gpus' : str(args.num_gpus)})
     # TODO(minjie): SoftmaxOutput
-    return net, [('data', (batch_size, 3, 224, 224))]
+    return net, [('data', (args.batch_size, 3, 224, 224))]
 
 def test_net():
     # print logging by default
     logging.basicConfig(level=logging.DEBUG)
 
-    net, data_shapes = get_symbol()
+    print(sys.argv)
+    parser = argparse.ArgumentParser("MLP single card code")
+    parser.add_argument('--batch_size', type=int, default=128, help='Batch size')
+    parser.add_argument('--num_gpus', type=int, default=2, help='Number of gpus')
+    args = parser.parse_args()
+    net, data_shapes = get_symbol(args)
 
     data_shapes = dict(data_shapes)
     data_types = {name: mx.base.mx_real_t for name, shp in data_shapes.items()}
@@ -80,17 +87,18 @@ def test_net():
                         grad_req='write')
 
     '''
-    for i in range(100):
-        if i == 10:
-            t0 = time.clock()
+    for i in range(num_loops):
+        print('=> loop %d' % i);
+        if i == cold_skip:
+            t0 = time.time()
         outputs = executor.forward()
         executor.backward([outputs[0]])
         for name, grad in grad_dict.items():
             grad.wait_to_read()
-    t1 = time.clock()
+    t1 = time.time()
 
     duration = t1 - t0
-    print('duration %f, speed %f' % (duration, float(duration) / 90))
+    print('duration %f, average %f' % (duration, float(duration) / (num_loops - cold_skip)))
     '''
 
 

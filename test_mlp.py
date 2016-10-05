@@ -18,7 +18,8 @@ def get_symbol(args):
   print('Batch size: %d, Hidden size: %d' % (batch_size, hidden_size))
   net = mx.symbol.Variable('data')
   for i in range(args.num_layers):
-    net = mx.symbol.FullyConnected(net, name='fc%d' % i, num_hidden=hidden_size, no_bias=True, attr={'num_gpus': str(args.num_gpus)})
+    net = mx.symbol.FullyConnected(net, name='fc%d' % i, num_hidden=hidden_size, \
+            attr={'num_gpus': str(args.num_gpus)})
   return net
 
 def test_mlp():
