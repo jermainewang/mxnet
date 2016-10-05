@@ -52,8 +52,9 @@ def test_mlp():
                         args_grad=grad_dict,
                         grad_req='write')
 
-    for i in range(60):
-        if i == 10:
+    for i in range(6):
+        print('loop #%d' % i)
+        if i == 5:
             t0 = time.time()
         outputs = executor.forward()
         executor.backward([outputs[0]])
@@ -62,7 +63,7 @@ def test_mlp():
     t1 = time.time()
 
     duration = t1 - t0
-    print('duration %f, average %f' % (duration, float(duration) / 50))
+    print('duration %f, average %f' % (duration, float(duration) / 1))
 
 
 if __name__ == "__main__":
