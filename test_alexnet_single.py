@@ -46,7 +46,7 @@ def get_symbol(args):
     net = mx.sym.FullyConnected(net, num_hidden=4096)
     net = mx.sym.Activation(net, act_type="relu")
     # group 5
-    net = mx.sym.FullyConnected(net, num_hidden=1000, attr={'num_gpus' : str(args.num_gpus)})
+    net = mx.sym.FullyConnected(net, num_hidden=1000, attr={'num_gpus' : '1'})
     # TODO(minjie): SoftmaxOutput
     return net, [('data', (args.batch_size, 3, 224, 224))]
 
@@ -57,7 +57,6 @@ def test_net():
     print(sys.argv)
     parser = argparse.ArgumentParser("MLP single card code")
     parser.add_argument('--batch_size', type=int, default=128, help='Batch size')
-    parser.add_argument('--num_gpus', type=int, default=2, help='Number of gpus')
     args = parser.parse_args()
     net, data_shapes = get_symbol(args)
 
@@ -72,16 +71,16 @@ def test_net():
     arg_types, out_types, aux_types = net.infer_type(**data_types)
 
     # create ndarrays for all arguments.
-    arg_arrays = [mx.nd.zeros(shape, mx.cpu(0), dtype=dtype)
+    arg_arrays = [mx.nd.zeros(shape, mx.gpu(0), dtype=dtype)
                   for shape, dtype in zip(arg_shapes, arg_types)]
     print('Num arguments: ', len(arg_arrays))
     # create gradient ndarray for all parameters.
-    grad_dict = {name : mx.nd.zeros(shape, mx.cpu(0), dtype=dtype)
+    grad_dict = {name : mx.nd.zeros(shape, mx.gpu(0), dtype=dtype)
                  for name, shape, dtype in zip(net.list_arguments(), arg_shapes, arg_types)
                  if name != 'data'}
     print('Argument grads: ', grad_dict.keys())
 
-    executor = net.bind(ctx=mx.cpu(0),
+    executor = net.bind(ctx=mx.gpu(0),
                         args=arg_arrays,
                         args_grad=grad_dict,
                         grad_req='write')

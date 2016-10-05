@@ -37,7 +37,7 @@ def ResModule(sym, base_filter, stage, layer, fix_gamma=False):
     return sum_sym
 
 # [3, 4, 6, 3]
-def get_symbol(args, layers=[3, 8, 36, 3]):
+def get_symbol(args, layers=[3, 4, 6, 3]):
     """Get a 4-stage residual net, with configurations specified as layers.
 
     Parameters
@@ -45,7 +45,7 @@ def get_symbol(args, layers=[3, 8, 36, 3]):
     layers : list of stage configuratrion
     """
     assert(len(layers) == 4)
-    base_filter = 64
+    base_filter = 64 * 2
     net = mx.sym.Variable(name='data')
     net = ConvModule(net, base_filter, kernel=(7, 7), pad=(3, 3), stride=(2, 2))
     net = mx.sym.Pooling(data=net, pool_type="max", kernel=(3, 3), stride=(2, 2))
