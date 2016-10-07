@@ -9,7 +9,7 @@ import logging
 import math
 import argparse
 
-num_loops = 50
+num_loops = 20
 cold_skip = 10
 
 # symbol net
@@ -37,7 +37,7 @@ def ResModule(sym, base_filter, stage, layer, fix_gamma=False):
     return sum_sym
 
 # [3, 4, 6, 3]
-def get_symbol(args, layers=[3, 8, 36, 3]):
+def get_symbol(args, layers=[3, 24, 36, 3]):
     """Get a 4-stage residual net, with configurations specified as layers.
 
     Parameters

@@ -346,10 +346,15 @@ void GraphExecutor::Init(nnvm::Symbol symbol,
       output_arrays_.push_back(data_entry_[idx.entry_id(e)]);
     }
     // initialize head gradient array
-    for (const auto& kv : head_grad_map_) {
-      const nnvm::Node* head_grad_node = kv.first;
-      const uint32_t nid = idx.node_id(head_grad_node);
-      head_grad_array_.push_back(data_entry_[idx.entry_id(nid, 0)]);
+    if (num_forward_inputs_ != idx.input_nodes().size()) {
+      // TODO(minjie): this ugly check is required since the graph may be changed
+      // after several passes and the head_grad_map_ may be invalid. This is an
+      // example of external reference to internal graph structure.
+      for (const auto& kv : head_grad_map_) {
+        const nnvm::Node* head_grad_node = kv.first;
+        const uint32_t nid = idx.node_id(head_grad_node);
+        head_grad_array_.push_back(data_entry_[idx.entry_id(nid, 0)]);
+      }
     }
   }
   LOG(INFO) << "Finished initialize output and head gradient arrays.";
@@ -532,16 +537,21 @@ void GraphExecutor::InitDataEntryMemory(const std::vector<NDArray>& shared_pool)
   std::vector<PoolEntry> pool_info;
 
   // assign array to head gradient
-  LOG(INFO) << "Point head gradient entry to given NDArray";
-  for (const auto& kv : head_grad_map_) {
-    const nnvm::Node* head_grad_node = kv.first;
-    const size_t output_idx = kv.second;
-    const uint32_t nid = idx.node_id(head_grad_node);
-    const uint32_t eid = idx.entry_id(idx.outputs()[output_idx]);
-    CHECK_NE(vshape[eid].ndim(), 0);
-    CHECK_NE(vdtype[eid], -1);
-    data_entry_[idx.entry_id(nid, 0)] =
-        NDArray(vshape[eid], data_context[eid], vdtype[eid]);
+  if (num_forward_inputs_ != idx.input_nodes().size()) {
+    // TODO(minjie): this ugly check is required since the graph may be changed
+    // after several passes and the head_grad_map_ may be invalid. This is an
+    // example of external reference to internal graph structure.
+    LOG(INFO) << "Point head gradient entry to given NDArray";
+    for (const auto& kv : head_grad_map_) {
+      const nnvm::Node* head_grad_node = kv.first;
+      const size_t output_idx = kv.second;
+      const uint32_t nid = idx.node_id(head_grad_node);
+      const uint32_t eid = idx.entry_id(idx.outputs()[output_idx]);
+      CHECK_NE(vshape[eid].ndim(), 0);
+      CHECK_NE(vdtype[eid], -1);
+      data_entry_[idx.entry_id(nid, 0)] =
+          NDArray(vshape[eid], data_context[eid], vdtype[eid]);
+    }
   }
   // get maximum bytes in each pool
   LOG(INFO) << "Compute maximum bytes of each memory pool.";

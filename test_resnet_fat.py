@@ -9,7 +9,7 @@ import logging
 import math
 import argparse
 
-num_loops = 50
+num_loops = 20
 cold_skip = 10
 
 # symbol net
