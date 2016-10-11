@@ -34,6 +34,7 @@ class KVStoreLocal : public KVStore {
   }
 
   virtual ~KVStoreLocal() {
+    CHECK(false);
     delete comm_;
   }
 
