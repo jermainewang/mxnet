@@ -9,8 +9,16 @@ import logging
 import math
 import argparse
 
-num_loops = 20
-cold_skip = 10
+num_loops = 30
+cold_loops = 5
+class Timer:
+  def __init__(self):
+    self.t0 = None
+    self.t1 = None
+  def start(self):
+    self.t0 = time.time()
+  def dur(self):
+    return time.time() - self.t0
 
 # symbol net
 def ConvModule(net, num_filter, kernel, pad=(0, 0), stride=(1, 1), fix_gamma=False):
@@ -37,7 +45,7 @@ def ResModule(sym, base_filter, stage, layer, fix_gamma=False):
     return sum_sym
 
 # [3, 4, 6, 3]
-def get_symbol(args, layers=[3, 8, 36, 3]):
+def get_symbol(args, layers=[3, 4, 6, 3]):
     """Get a 4-stage residual net, with configurations specified as layers.
 
     Parameters
@@ -45,7 +53,11 @@ def get_symbol(args, layers=[3, 8, 36, 3]):
     layers : list of stage configuratrion
     """
     assert(len(layers) == 4)
-    base_filter = 64 * 2
+    layers[0] *= args.res1
+    layers[1] *= args.res2
+    layers[2] *= args.res3
+    layers[3] *= args.res4
+    base_filter = 64 * args.fat
     net = mx.sym.Variable(name='data')
     net = ConvModule(net, base_filter, kernel=(7, 7), pad=(3, 3), stride=(2, 2))
     net = mx.sym.Pooling(data=net, pool_type="max", kernel=(3, 3), stride=(2, 2))
@@ -58,10 +70,8 @@ def get_symbol(args, layers=[3, 8, 36, 3]):
     net = mx.symbol.Flatten(data=net, name='flatten')
     net = mx.symbol.FullyConnected(data=net, num_hidden=1000, \
             name='fc1', no_bias=True, attr={'num_gpus' : '1'})
-    # TODO(minjie): SoftmaxOutput
-    #net = mx.symbol.SoftmaxOutput(data=fc1, name='softmax')
-    #return net, [('data', (64, 3, 224, 224))], [('softmax_label', (64,))]
-    return net, [('data', (args.batch_size, 3, 224, 224))]
+    net = mx.symbol.SoftmaxOutput(data=net, name='softmax')
+    return net, [('data', (args.batch_size, 3, 224, 224))], [('softmax_label', (args.batch_size,))]
 
 def test_net():
     # print logging by default
@@ -70,46 +80,40 @@ def test_net():
     print(sys.argv)
     parser = argparse.ArgumentParser("MLP single card code")
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size')
+    parser.add_argument('--num_gpus', type=int, default=1, help='Number of gpus used in data parallelism')
+    parser.add_argument('--fat', type=int, default=1, help='Multiplier on channel size')
+    parser.add_argument('--res1', type=int, default=1, help='Multiplier on the number of 1st ResModule')
+    parser.add_argument('--res2', type=int, default=1, help='Multiplier on the number of 2nd ResModule')
+    parser.add_argument('--res3', type=int, default=1, help='Multiplier on the number of 3rd ResModule')
+    parser.add_argument('--res4', type=int, default=1, help='Multiplier on the number of 4th ResModule')
     args = parser.parse_args()
-    net, data_shapes = get_symbol(args)
+    net, data_shapes, label_shapes = get_symbol(args)
 
-    data_shapes = dict(data_shapes)
-    data_types = {name: mx.base.mx_real_t for name, shp in data_shapes.items()}
+    train_data_shape = data_shapes[0][1]
+    train_label_shape = label_shapes[0][1]
+    train_iter = mx.io.NDArrayIter(
+        data=mx.nd.zeros(train_data_shape, mx.gpu(0)),
+        label=mx.nd.zeros(train_label_shape, mx.gpu(0)),
+        batch_size=args.batch_size)
+    kv = mx.kvstore.create('device')
+    train_ctx = [mx.gpu(i) for i in range(args.num_gpus)]
+    
+    model = mx.model.FeedForward(ctx=train_ctx,
+                                 symbol=net,
+                                 num_epoch=num_loops,
+                                 learning_rate=0.0,
+                                 optimizer='sgd')
 
-    #print(net.list_arguments())
-    #print(net.list_outputs())
+    timer = Timer()
+    def _callback(epoch):
+      if epoch.epoch == cold_loops:
+        timer.start()
+    model.fit(X=train_iter,
+              kvstore=kv,
+              batch_end_callback=_callback)
 
-    # infer shapes
-    arg_shapes, out_shapes, aux_shapes = net.infer_shape(**data_shapes)
-    arg_types, out_types, aux_types = net.infer_type(**data_types)
-
-    # create ndarrays for all arguments.
-    arg_arrays = [mx.nd.zeros(shape, mx.gpu(0), dtype=dtype)
-                  for shape, dtype in zip(arg_shapes, arg_types)]
-    print('Num arguments: ', len(arg_arrays))
-    # create gradient ndarray for all parameters.
-    grad_dict = {name : mx.nd.zeros(shape, mx.gpu(0), dtype=dtype)
-                 for name, shape, dtype in zip(net.list_arguments(), arg_shapes, arg_types)
-                 if name != 'data'}
-    print('Argument grads: ', grad_dict.keys())
-
-    executor = net.bind(ctx=mx.gpu(0),
-                        args=arg_arrays,
-                        args_grad=grad_dict,
-                        grad_req='write')
-
-    for i in range(num_loops):
-        print('=> loop %d' % i);
-        if i == cold_skip:
-            t0 = time.time()
-        outputs = executor.forward()
-        executor.backward([outputs[0]])
-        for name, grad in grad_dict.items():
-            grad.wait_to_read()
-    t1 = time.time()
-
-    duration = t1 - t0
-    print('duration %f, average %f' % (duration, float(duration) / (num_loops - cold_skip)))
+    duration = timer.dur()
+    print('duration %f, average %f' % (duration, float(duration) / (num_loops - cold_loops)))
 
 
 if __name__ == "__main__":

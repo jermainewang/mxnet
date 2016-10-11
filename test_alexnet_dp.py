@@ -7,8 +7,16 @@ import pickle as pickle
 import logging
 import argparse
 
-num_loops = 50
-cold_skip = 10
+num_loops = 30
+cold_loops = 10
+class Timer:
+  def __init__(self):
+    self.t0 = None
+    self.t1 = None
+  def start(self):
+    self.t0 = time.time()
+  def dur(self):
+    return time.time() - self.t0
 
 # symbol net
 def conv_factory(data, num_filter, kernel, stride=(1, 1), pad=(1, 1), with_bn=False):
@@ -60,26 +68,31 @@ def test_net():
     args = parser.parse_args()
     net, data_shapes, label_shapes = get_symbol(args)
 
+    train_data_shape = data_shapes[0][1]
+    train_label_shape = label_shapes[0][1]
     train_iter = mx.io.NDArrayIter(
-        data=mx.nd.zeros(data_shapes[0][1], mx.cpu()),
-        label=mx.nd.zeros(label_shapes[0][1], mx.cpu()),
+        data=mx.nd.zeros(train_data_shape, mx.gpu(0)),
+        label=mx.nd.zeros(train_label_shape, mx.gpu(0)),
         batch_size=args.batch_size)
     kv = mx.kvstore.create('device')
     train_ctx = [mx.gpu(i) for i in range(args.num_gpus)]
     
     model = mx.model.FeedForward(ctx=train_ctx,
                                  symbol=net,
-                                 num_epoch=10,
+                                 num_epoch=num_loops,
                                  learning_rate=0.0,
                                  optimizer='sgd')
 
-    t0 = time.time()
+    timer = Timer()
+    def _callback(epoch):
+      if epoch.epoch == cold_loops:
+        timer.start()
     model.fit(X=train_iter,
-              kvstore=kv)
-    t1 = time.time()
+              kvstore=kv,
+              batch_end_callback=_callback)
 
-    duration = t1 - t0
-    print('duration %f, average %f' % (duration, float(duration) / (num_loops - cold_skip)))
+    duration = timer.dur()
+    print('duration %f, average %f' % (duration, float(duration) / (num_loops - cold_loops)))
 
 
 if __name__ == "__main__":
