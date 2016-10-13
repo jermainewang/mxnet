@@ -36,7 +36,11 @@ def ResModule(sym, base_filter, stage, layer, fix_gamma=False):
     force = layer % 2 == 1
     return sum_sym
 
-# [3, 4, 6, 3]
+# Res-50: [3, 4, 6, 3]
+# Res-101: [3, 4, 24, 3]
+# Res-152: [3, 8, 36, 3]
+# Res-200: [3, 24, 36, 3]
+# Res-1001: [16, 64, 128, 256]
 def get_symbol(args, layers=[3, 4, 6, 3]):
     """Get a 4-stage residual net, with configurations specified as layers.
 
@@ -45,10 +49,10 @@ def get_symbol(args, layers=[3, 4, 6, 3]):
     layers : list of stage configuratrion
     """
     assert(len(layers) == 4)
-    layers[0] *= args.res1
-    layers[1] *= args.res2
-    layers[2] *= args.res3
-    layers[3] *= args.res4
+    layers[0] = args.res1
+    layers[1] = args.res2
+    layers[2] = args.res3
+    layers[3] = args.res4
     base_filter = 64 * args.fat
     net = mx.sym.Variable(name='data')
     net = ConvModule(net, base_filter, kernel=(7, 7), pad=(3, 3), stride=(2, 2))
@@ -76,10 +80,10 @@ def test_net():
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size')
     parser.add_argument('--num_gpus', type=int, default=2, help='Number of gpus')
     parser.add_argument('--fat', type=int, default=1, help='Multiplier on channel size')
-    parser.add_argument('--res1', type=int, default=1, help='Multiplier on the number of 1st ResModule')
-    parser.add_argument('--res2', type=int, default=1, help='Multiplier on the number of 2nd ResModule')
-    parser.add_argument('--res3', type=int, default=1, help='Multiplier on the number of 3rd ResModule')
-    parser.add_argument('--res4', type=int, default=1, help='Multiplier on the number of 4th ResModule')
+    parser.add_argument('--res1', type=int, default=3, help='Number of 1st ResModule')
+    parser.add_argument('--res2', type=int, default=4, help='Number of 2nd ResModule')
+    parser.add_argument('--res3', type=int, default=6, help='Number of 3rd ResModule')
+    parser.add_argument('--res4', type=int, default=3, help='Number of 4th ResModule')
     args = parser.parse_args()
     net, data_shapes = get_symbol(args)
 
