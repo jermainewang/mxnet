@@ -207,11 +207,14 @@ Graph AttachOpExecs(Graph g) {
         ret[nodeid] = std::make_shared<FComputeExecutor>(DoNothingFCompute, inode.source->attrs);
         continue;
       }
+    } else {
+      LOG(WARNING) << "!!! No ctx assigned? " << inode.source->attrs.name;
     }*/
 
     /*if (op->name == "_CrossDeviceCopy"
+        //|| op->name == "Concat"
         //|| op->name == "FullyConnected"
-        //|| op->name == "ElementWiseSum" || op->name == "Concat" || op->name == "_backward_FullyConnected"
+        //|| op->name == "ElementWiseSum" || op->name == "_backward_FullyConnected"
         ) {
       LOG(WARNING) << "==========>\""
         << inode.source->op()->name << "\". DoNothing.";

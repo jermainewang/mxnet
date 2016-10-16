@@ -8,8 +8,8 @@ import pickle as pickle
 import logging
 import argparse
 
-num_loops = 50
-cold_skip = 10
+num_loops = 25
+cold_skip = 5
 
 # symbol net
 def get_symbol(args):

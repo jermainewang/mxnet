@@ -108,14 +108,14 @@ GraphExecutor::~GraphExecutor() {
 }
 
 void GraphExecutor::Forward(bool is_train) {
-//  static int calls = 0;
-//  std::ofstream fout("trace_" + std::to_string(calls) + ".txt");
-//  for (const auto& rec : *trace_records_) {
-//    fout << std::get<0>(rec) << " " << std::get<1>(rec)
-//      << " " << std::get<2>(rec) << std::endl;
-//  }
-//  ++calls;
-//  trace_records_->clear();
+  /*static int calls = 0;
+  std::ofstream fout("./traces/trace_" + std::to_string(calls) + ".txt");
+  for (const auto& rec : *trace_records_) {
+    fout << std::get<0>(rec) << " " << std::get<1>(rec)
+      << " " << std::get<2>(rec) << std::endl;
+  }
+  ++calls;
+  trace_records_->clear();*/
   RunOps(is_train, 0, num_forward_nodes_);
 }
 
@@ -765,6 +765,16 @@ void GraphExecutor::InitCachedOps() {
       << "Variable should not both used and mutated in one operator."
       << " This will cause deadlock during execution.";
 
+    /*std::cout << "Node #" << nid << " " << node_name << ": use [";
+    for (const auto x : use_vars) {
+      std::cout << x << " ";
+    }
+    std::cout << "] mutate [";
+    for (const auto x : mutate_vars) {
+      std::cout << x << " ";
+    }
+    std::cout << "]" << std::endl;*/
+    
     Engine::Get()->PushSync([exec](RunContext rctx) {
         exec->Setup();
       }, Context::CPU(), {}, all_vars);
@@ -796,12 +806,12 @@ void GraphExecutor::InitCachedOps() {
         LOG(INFO) << "Async !!!!";
       }
 
-      //gettimeofday(&ed, nullptr);
-      //TraceRecord rec = std::make_tuple(node_name, st.tv_usec / 1000.0, ed.tv_usec / 1000.0);
-      //{
-        //std::lock_guard<std::mutex> guard(trace_mutex_);
-        //trace_records_->push_back(rec);
-      //}
+      /*gettimeofday(&ed, nullptr);
+      TraceRecord rec = std::make_tuple(std::to_string(nid) + "_" + node_name, st.tv_usec / 1000.0, ed.tv_usec / 1000.0);
+      {
+        std::lock_guard<std::mutex> guard(trace_mutex_);
+        trace_records_->push_back(rec);
+      }*/
     };
     // setup the vars
     op_nodes_[nid].cached_opr = Engine::Get()->NewOperator(
@@ -815,7 +825,12 @@ void GraphExecutor::RunOps(bool is_train, size_t topo_start, size_t topo_end) {
   const auto& idx = graph_.indexed_graph();
   for (size_t nid = topo_start; nid < topo_end; ++nid) {
     const auto& inode = idx[nid];
+
     //LOG(INFO) << "Push node #" << nid << " " << inode.source->attrs.name;
+    //struct timeval st, ed;
+    //gettimeofday(&st, nullptr);
+    
+
     if (inode.source->is_variable()) continue;
     OpNode& opnode = op_nodes_[nid];
     opnode.exec->op_ctx.is_train = is_train;
@@ -829,6 +844,14 @@ void GraphExecutor::RunOps(bool is_train, size_t topo_start, size_t topo_end) {
     } else {
       LOG(FATAL) << "Not accessed";
     }
+
+    /*gettimeofday(&ed, nullptr);
+    const auto& node_name = inode.source->attrs.name;
+    TraceRecord rec = std::make_tuple("Push:" + std::to_string(nid) + "_" + node_name, st.tv_usec / 1000.0, ed.tv_usec / 1000.0);
+    {
+      std::lock_guard<std::mutex> guard(trace_mutex_);
+      trace_records_->push_back(rec);
+    }*/
 
     if (monitor_callback_) {
       std::vector<std::string> output_names;
