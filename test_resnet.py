@@ -9,8 +9,8 @@ import logging
 import math
 import argparse
 
-num_loops = 20
-cold_skip = 10
+num_loops = 25
+cold_skip = 5
 
 # symbol net
 def ConvModule(net, num_filter, kernel, pad=(0, 0), stride=(1, 1), fix_gamma=False):

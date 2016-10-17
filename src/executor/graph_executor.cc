@@ -745,6 +745,8 @@ void GraphExecutor::InitCachedOps() {
     // - Auxiliary states used by the operator.
     // - Output arrays.
     // - Finish variable.
+    // TODO(minjie): cannot put auxiliary data in mutate vars right now since
+    // their dependencies are not correct.
     for (auto& r : exec->op_ctx.requested) {
       mutate_vars.push_back(r.var);
     }
@@ -810,6 +812,7 @@ void GraphExecutor::InitCachedOps() {
       TraceRecord rec = std::make_tuple(std::to_string(nid) + "_" + node_name, st.tv_usec / 1000.0, ed.tv_usec / 1000.0);
       {
         std::lock_guard<std::mutex> guard(trace_mutex_);
+        //std::cout << "Running: " << node_name << std::endl;
         trace_records_->push_back(rec);
       }*/
     };
@@ -829,9 +832,10 @@ void GraphExecutor::RunOps(bool is_train, size_t topo_start, size_t topo_end) {
     //LOG(INFO) << "Push node #" << nid << " " << inode.source->attrs.name;
     //struct timeval st, ed;
     //gettimeofday(&st, nullptr);
-    
 
-    if (inode.source->is_variable()) continue;
+    if (inode.source->is_variable()) {
+      continue;
+    }
     OpNode& opnode = op_nodes_[nid];
     opnode.exec->op_ctx.is_train = is_train;
     if (opnode.exec->exec_type() == Operator::kCrossDeviceCopy) {

@@ -188,7 +188,7 @@ Graph AttachOpExecs(Graph g) {
   // initialize the nodes
   for (size_t nodeid = 0; nodeid < idx.num_nodes(); ++nodeid) {
     const auto& inode = idx[nodeid];
-    LOG(INFO) << "Initialize node #" << nodeid << ": " << inode.source->attrs.name;
+    //LOG(INFO) << "Initialize node #" << nodeid << ": " << inode.source->attrs.name;
     if (inode.source->is_variable()) {
       // Do nothing for variable node.
       continue;
@@ -265,8 +265,8 @@ Graph AttachOpExecs(Graph g) {
             mxnet::op::OpPropGetOpProperty(inode.source->attrs),
             mutate_index);*/
         // Create FCompute for this:
-        LOG(WARNING) << "Current workaround for node \""
-          << inode.source->op()->name << "\". DoNothing.";
+        //LOG(WARNING) << "Current workaround for node \""
+          //<< inode.source->op()->name << "\". DoNothing.";
         ret[nodeid] = std::make_shared<FComputeExecutor>(DoNothingFCompute, inode.source->attrs);
       }
     } else if (fcompute != nullptr) {
@@ -274,8 +274,8 @@ Graph AttachOpExecs(Graph g) {
       // function as executor.
       ret[nodeid] = std::make_shared<FComputeExecutor>(fcompute, inode.source->attrs);
     } else {
-      LOG(WARNING) << "FCompute not registered for node \""
-        << inode.source->op()->name << "\". DoNothingFCompute will be registered.";
+      //LOG(WARNING) << "FCompute not registered for node \""
+        //<< inode.source->op()->name << "\". DoNothingFCompute will be registered.";
       ret[nodeid] = std::make_shared<FComputeExecutor>(DoNothingFCompute, NodeAttrs());
     }
   }
