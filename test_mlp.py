@@ -30,7 +30,7 @@ def test_mlp():
     parser = argparse.ArgumentParser("MLP single card code")
     parser.add_argument('--batch_size', type=int, help='Batch size')
     parser.add_argument('--hidden_size', type=int, help='Hidden size')
-    parser.add_argument('--num_layers', type=int, default=10, help='Number of hidden layers')
+    parser.add_argument('--num_layers', type=int, default=5, help='Number of hidden layers')
     parser.add_argument('--num_gpus', type=int, default=2, help='Number of gpus')
     args = parser.parse_args()
     net = get_symbol(args)

@@ -32,7 +32,8 @@ def conv_factory(data, num_filter, kernel, stride=(1, 1), pad=(1, 1), with_bn=Fa
                              num_filter=num_filter,
                              kernel=kernel,
                              stride=stride,
-                             pad=pad)
+                             pad=pad,
+                             no_bias=True)
     if with_bn:
         net = mx.sym.BatchNorm(net, fix_gamma=False)
     net = mx.sym.Activation(net, act_type="relu")

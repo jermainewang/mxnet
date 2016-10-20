@@ -300,6 +300,14 @@ void CopyFromTo(const NDArray &from, NDArray *to, int priority) {
   std::vector<Engine::VarHandle> const_vars;
   if (from.var() != ret.var()) const_vars.push_back(from.var());
 
+  // TODO(minjie): no copy
+  int no_copy = dmlc::GetEnv("NO_COPY", 0);
+  if (no_copy) {
+    to->CheckAndAlloc();
+    return;
+  }
+  LOG(INFO) << "DO Copy!";
+
   if (a == cpu::kDevMask && b == cpu::kDevMask) {
     Engine::Get()->PushSync([from, ret](RunContext ctx) {
         ret.CheckAndAlloc();
