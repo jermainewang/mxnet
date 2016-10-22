@@ -211,7 +211,8 @@ Graph AttachOpExecs(Graph g) {
       LOG(WARNING) << "!!! No ctx assigned? " << inode.source->attrs.name;
     }*/
 
-    /*if (op->name == "_CrossDeviceCopy"
+    /*
+    if (op->name == "_CrossDeviceCopy"
         //|| op->name == "Concat"
         //|| op->name == "FullyConnected"
         //|| op->name == "ElementWiseSum" || op->name == "_backward_FullyConnected"
