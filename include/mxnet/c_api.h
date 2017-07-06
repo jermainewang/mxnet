@@ -666,6 +666,7 @@ MXNET_DLL int MXSymbolCreateAtomicSymbol(AtomicSymbolCreator creator,
                                          const char **keys,
                                          const char **vals,
                                          SymbolHandle *out);
+
 /*!
  * \brief Create a Variable Symbol.
  * \param name name of the variable
@@ -1618,6 +1619,18 @@ MXNET_DLL int MXRtcPush(RtcHandle handle, mx_uint num_input, mx_uint num_output,
 MXNET_DLL int MXRtcFree(RtcHandle handle);
 
 MXNET_DLL int MXCustomOpRegister(const char* op_type, CustomOpPropCreator creator);
+
+/////////////// Subgraph APIs
+typedef void *GraphHandle;
+MXNET_DLL int MXGraphCreate(SymbolHandle symbol, GraphHandle *graph);
+MXNET_DLL int MXGraphFree(GraphHandle graph);
+MXNET_DLL int MXSymbolCreateGraphSymbol(GraphHandle graph,
+                                        mx_uint num_param,
+                                        const char **keys,
+                                        const char **vals,
+                                        SymbolHandle *out);
+/////////////// Subgraph APIs
+
 
 #ifdef __cplusplus
 }

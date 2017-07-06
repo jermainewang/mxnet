@@ -2244,6 +2244,7 @@ def %s(%s):
         func_name.lower(), handle.value))
 
     local = {}
+    print(''.join(code))
     exec(''.join(code), None, local)  # pylint: disable=exec-used
     symbol_function = local[func_name]
     symbol_function.__name__ = func_name

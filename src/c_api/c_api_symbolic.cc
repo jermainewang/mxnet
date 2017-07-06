@@ -6,6 +6,7 @@
 #include <mxnet/base.h>
 #include <mxnet/c_api.h>
 #include <nnvm/c_api.h>
+#include <nnvm/graph.h>
 #include <nnvm/pass.h>
 #include <nnvm/pass_functions.h>
 #include <nnvm/symbolic.h>
@@ -48,6 +49,38 @@ std::vector<uint32_t> ReadOnlyArgIndices(const nnvm::IndexedGraph& idx) {
 }
 
 }  // namespace mxnet
+
+namespace {
+
+std::unordered_map<std::string, std::string>
+_ExtractSymbolKWArgs(mx_uint num_param,
+                     const char** keys,
+                     const char** vals) {
+  std::unordered_map<std::string, std::string> kwargs;
+  for (nn_uint i = 0; i < num_param; ++i) {
+    bool flag = false;
+    for (const auto &k : kHiddenKeys) {
+      std::string tmp(keys[i]);
+      size_t pos = tmp.rfind(k);
+      if (pos == 0) {
+        kwargs.insert({"__" + tmp + "__", std::string(vals[i])});
+        flag = true;
+        break;
+      } else if (pos != std::string::npos && pos == tmp.length() - k.length()) {
+        std::ostringstream os;
+        os << "setting variable attributes with " << keys[i] << " is deprecated. "
+           << "please instead use\nw = Variable(" << k << "=" << vals[i] << ")\n"
+           << "sym = YourSymbolName(" << tmp.substr(0, pos-1) << "=w)";
+        throw dmlc::Error(os.str());
+      }
+    }
+    if (!flag)
+      kwargs.insert({std::string(keys[i]), std::string(vals[i])});
+  }
+  return kwargs;
+}
+
+}  // namespace
 
 // symbolic configuration generation API.
 // Redirect to NNVM's C API
@@ -98,28 +131,7 @@ int MXSymbolCreateAtomicSymbol(AtomicSymbolCreator creator,
   nnvm::Symbol *s = new nnvm::Symbol();
   API_BEGIN();
   const nnvm::Op* op = static_cast<const nnvm::Op*>(creator);
-  std::unordered_map<std::string, std::string> kwargs;
-  for (nn_uint i = 0; i < num_param; ++i) {
-    bool flag = false;
-    for (const auto &k : kHiddenKeys) {
-      std::string tmp(keys[i]);
-      size_t pos = tmp.rfind(k);
-      if (pos == 0) {
-        kwargs.insert({"__" + tmp + "__", std::string(vals[i])});
-        flag = true;
-        break;
-      } else if (pos != std::string::npos && pos == tmp.length() - k.length()) {
-        std::ostringstream os;
-        os << "setting variable attributes with " << keys[i] << " is deprecated. "
-           << "please instead use\nw = Variable(" << k << "=" << vals[i] << ")\n"
-           << "sym = YourSymbolName(" << tmp.substr(0, pos-1) << "=w)";
-        throw dmlc::Error(os.str());
-      }
-    }
-    if (!flag)
-      kwargs.insert({std::string(keys[i]), std::string(vals[i])});
-  }
-  *s = nnvm::Symbol::CreateFunctor(op, std::move(kwargs));
+  *s = nnvm::Symbol::CreateFunctor(op, _ExtractSymbolKWArgs(num_param, keys, vals));
   *out = s;
   API_END_HANDLE_ERROR(delete s;);
 }
@@ -546,3 +558,34 @@ int MXSymbolGrad(SymbolHandle sym, mx_uint num_wrt, const char** wrt, SymbolHand
   LOG(FATAL) << "not implemented";
   API_END();
 }
+
+/////////////// Subgraph APIs
+int MXGraphCreate(SymbolHandle symbol, GraphHandle *graph) {
+  using namespace nnvm;
+  GraphPtr* pg = new GraphPtr();
+  *pg = Graph::Create();
+  API_BEGIN();
+  (*pg)->outputs = static_cast<Symbol*>(symbol)->outputs;
+  *graph = pg;
+  API_END_HANDLE_ERROR(delete pg;);
+}
+int MXGraphFree(GraphHandle graph) {
+  using namespace nnvm;
+  API_BEGIN();
+  delete static_cast<GraphPtr*>(graph);
+  API_END();
+}
+int MXSymbolCreateGraphSymbol(GraphHandle ghdl,
+                              mx_uint num_param,
+                              const char **keys,
+                              const char **vals,
+                              SymbolHandle *out) {
+  using namespace nnvm;
+  Symbol *s = new Symbol();
+  API_BEGIN();
+  GraphPtr* pg = static_cast<GraphPtr*>(ghdl);
+  *s = nnvm::Symbol::CreateFunctor(*pg, _ExtractSymbolKWArgs(num_param, keys, vals));
+  *out = s;
+  API_END_HANDLE_ERROR(delete s;);
+}
+/////////////// Subgraph APIs
