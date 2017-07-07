@@ -9,14 +9,39 @@ def _conv_block():
     net = sym.BatchNorm(net, name='bn')
     net = sym.Activation(net, name='relu', act_type='relu')
     net = sym.Pooling(net, name='pool', kernel=(2,2), stride=(2,2), pool_type='max')
-    g = graph.create(net)
+    g = graph.Graph(net)
     return g
 
-def test_conv():
+def test_conv_compose_no_share():
+    """
+    Graph symbol compose rules:
+    1. Allow missing input symbols. If missing, new variable
+       will be created.
+    2. How to deal with multiple outputs?
+    """
     ConvBlock = graph.symbolize(_conv_block())
     net = sym.Variable('data')
     net = ConvBlock(net, name='conv1')
     net = ConvBlock(net, name='conv2')
+    assert net.list_arguments() == [
+            'data',
+            'conv1_conv_weight', 'conv1_conv_bias', 'conv1_bn_gamma', 'conv1_bn_beta', 'conv1_bn_moving_mean', 'conv1_bn_moving_var',
+            'conv2_conv_weight', 'conv2_conv_bias', 'conv2_bn_gamma', 'conv2_bn_beta', 'conv2_bn_moving_mean', 'conv2_bn_moving_var'
+            ]
+
+def test_conv_compose_share():
+    ConvBlock = graph.symbolize(_conv_block())
+    net = sym.Variable('data')
+    conv_weight = sym.Variable('conv_weight')
+    net = ConvBlock(data=net, conv_weight=conv_weight, name='conv1')
+    net = ConvBlock(data=net, conv_weight=conv_weight, name='conv2')
+    assert net.list_arguments() == [
+            'data',
+            'conv_weight',
+            'conv1_conv_bias', 'conv1_bn_gamma', 'conv1_bn_beta', 'conv1_bn_moving_mean', 'conv1_bn_moving_var',
+            'conv2_conv_bias', 'conv2_bn_gamma', 'conv2_bn_beta', 'conv2_bn_moving_mean', 'conv2_bn_moving_var'
+            ]
 
 if __name__ == '__main__':
-    test_conv()
+    test_conv_compose_no_share()
+    test_conv_compose_share()

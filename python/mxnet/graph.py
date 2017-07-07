@@ -2,12 +2,14 @@
 from __future__ import absolute_import
 
 import ctypes
+import os as _os
+import sys as _sys
 
 from .attribute import AttrScope
 from .base import _LIB
 from .base import check_call, c_array, c_str, mx_uint
 from .base import GraphHandle, SymbolHandle
-from .symbol import Symbol
+from .symbol import Symbol, Variable
 from .name import NameManager
 
 # Use different version of SymbolBase
@@ -24,10 +26,29 @@ except ImportError:
         raise ImportError("Cython Module cannot be loaded but MXNET_ENFORCE_CYTHON=1")
     from ._ctypes.symbol import SymbolBase
 
+def _create_graph_handle(symbol):
+    ghandle = GraphHandle()
+    check_call(_LIB.MXGraphCreate(
+        symbol.handle,
+        ctypes.byref(ghandle)))
+    return ghandle
+
+def _fill_missing_symbol_inputs(graph, sym_name, provided_args, provided_kwargs):
+    if provided_args is None:
+        # No need to fill in the kwargs from args.
+        return
+    required_args = graph.list_arguments()
+    for i, name in enumerate(required_args):
+        if i < len(provided_args):
+            assert not name in provided_kwargs, \
+                'Argument "%s" is specified twice' % name
+            provided_kwargs[name] = provided_args[i]
+
 class Graph(object):
-    def __init__(self, handle, name):
-        self._handle = handle
-        self._name = name
+    def __init__(self, symbol, name=None):
+        self._symbol = symbol
+        self._name = NameManager.current.get(name, 'graph')
+        self._handle = _create_graph_handle(symbol)
 
     @property
     def handle(self):
@@ -40,44 +61,40 @@ class Graph(object):
     def __del__(self):
         check_call(_LIB.MXGraphFree(self.handle));
 
-def create(symbol, name=None):
-    ghandle = GraphHandle()
-    check_call(_LIB.MXGraphCreate(
-        ctypes.c_void_p(symbol.handle),
-        ctypes.byref(ghandle)))
-    name = NameManager.current.get(name, 'graph')
-    return Graph(ghandle, name)
+    def list_arguments(self):
+        return self._symbol.list_arguments()
 
 def symbolize(graph):
-    def _graph_symbol_creator(inputs=None, name=None, attr=None, **kwargs):
-        #assert len(inputs) == graph.num_inputs()
-        if inputs:
-            assert all([isinstance(ele, SymbolBase) for ele in inputs]), \
-                'Argument "inputs" must be a list of symbols.'
+    def _graph_symbol_creator(sym_inputs=None, name=None, attr=None, **kwargs):
+        if sym_inputs is not None:
+            if not isinstance(sym_inputs, list):
+                sym_inputs = [sym_inputs]
+            assert all([isinstance(ele, SymbolBase) for ele in sym_inputs]), \
+                'Argument "sym_inputs" must be a list of symbols.'
 
         kwargs.update(AttrScope.current.get(attr))
         keys = []
         vals = []
+        sym_kwargs = dict()
         for k, v in kwargs.items():
-            assert not isinstance(v, SymbolBase), \
-                'Graph symbol does not allow symbol type kwargs.'
-            keys.append(c_str(k))
-            vals.append(c_str(v))
+            if isinstance(v, SymbolBase):
+                sym_kwargs[k] = v
+            else:
+                keys.append(c_str(k))
+                vals.append(c_str(v))
 
         sym_handle = SymbolHandle()
         keys = c_array(ctypes.c_char_p, keys)
         vals = c_array(ctypes.c_char_p, vals)
         check_call(_LIB.MXSymbolCreateGraphSymbol(
-            ctypes.c_void_p(graph.handle),
+            graph.handle,
             mx_uint(len(keys)),
             keys, vals,
             ctypes.byref(sym_handle)))
 
         ret = Symbol(sym_handle)
         name = NameManager.current.get(name, graph.name)
-        if inputs:
-            ret._compose(name=name)
-        else:
-            ret._compose(*inputs, name=name)
+        _fill_missing_symbol_inputs(graph, name, sym_inputs, sym_kwargs)
+        ret._compose(name=name, **sym_kwargs)
         return ret
     return _graph_symbol_creator
