@@ -12,6 +12,23 @@ def _conv_block():
     g = graph.Graph(net)
     return g
 
+def _conv_block_transform_grad():
+    g = _conv_block()
+    g = g.transform(passes="GradientV2")
+    return g
+
+def _conv_block_specialize_shape():
+    g = _conv_block()
+    g.specialize(passes="InferShapeV2", input_shapes=[(32, 100)])
+    return g
+
+def _conv_block_grad_and_shape():
+    g = _conv_block()
+    # ATTENTION: the following order cannot be changed.
+    g = g.transform(passes="GradientV2")
+    g.specialize(passes="InferShapeV2", input_shapes=[(32, 100)])
+    return g
+
 def test_conv_compose_no_share():
     """
     Graph symbol compose rules:
