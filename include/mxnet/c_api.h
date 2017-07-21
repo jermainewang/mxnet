@@ -1624,6 +1624,19 @@ MXNET_DLL int MXCustomOpRegister(const char* op_type, CustomOpPropCreator creato
 typedef void *GraphHandle;
 MXNET_DLL int MXGraphCreate(SymbolHandle symbol, GraphHandle *graph);
 MXNET_DLL int MXGraphFree(GraphHandle graph);
+MXNET_DLL int MXGraphSpecialize(GraphHandle graph,
+                                mx_uint num_param,
+                                const char **keys,
+                                const char **vals);
+MXNET_DLL int MXGraphGetGlobalAttrJSON(GraphHandle graph,
+                                       const char *key,
+                                       const char **out);
+MXNET_DLL int MXGraphGetNodeAttrJSON(GraphHandle graph,
+                                     const char *key,
+                                     const char **out);
+MXNET_DLL int MXGraphGetNodeEntryAttrJSON(GraphHandle graph,
+                                          const char *key,
+                                          const char **out);
 MXNET_DLL int MXSymbolCreateGraphSymbol(GraphHandle graph,
                                         mx_uint num_param,
                                         const char **keys,

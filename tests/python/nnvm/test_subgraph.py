@@ -12,6 +12,7 @@ def _conv_block():
     g = graph.Graph(net)
     return g
 
+'''
 def _conv_block_transform_grad():
     g = _conv_block()
     g = g.transform(passes="GradientV2")
@@ -28,6 +29,7 @@ def _conv_block_grad_and_shape():
     g = g.transform(passes="GradientV2")
     g.specialize(passes="InferShapeV2", input_shapes=[(32, 100)])
     return g
+'''
 
 def test_conv_compose_no_share():
     """
@@ -59,6 +61,19 @@ def test_conv_compose_share():
             'conv2_conv_bias', 'conv2_bn_gamma', 'conv2_bn_beta', 'conv2_bn_moving_mean', 'conv2_bn_moving_var'
             ]
 
+def test_specialize_coloring():
+    g = _conv_block()
+    g.specialize(color=1)
+    print(g.get_node_attr("node_colors"))
+    ConvBlock = graph.symbolize(g)
+    net = sym.Variable('data')
+    net = ConvBlock(net, name='conv1')
+    net = ConvBlock(net, name='conv2')
+    net_graph = graph.Graph(net)
+    net_graph.specialize(color=2)
+    print(net_graph.get_node_attr("node_colors"))
+
 if __name__ == '__main__':
     test_conv_compose_no_share()
     test_conv_compose_share()
+    test_specialize_coloring()

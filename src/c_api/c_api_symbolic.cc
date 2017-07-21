@@ -575,6 +575,69 @@ int MXGraphFree(GraphHandle graph) {
   delete static_cast<GraphPtr*>(graph);
   API_END();
 }
+int MXGraphSpecialize(GraphHandle graph,
+                      mx_uint num_param,
+                      const char **keys,
+                      const char **vals) {
+  using namespace nnvm;
+  API_BEGIN();
+  GraphPtr pg = *static_cast<GraphPtr*>(graph);
+  const auto& kwargs = _ExtractSymbolKWArgs(num_param, keys, vals);
+  std::unordered_map<std::string, std::shared_ptr<any>> kwargs_any;
+  for (const auto& kv : kwargs) {
+    kwargs_any[kv.first] = std::make_shared<any>(kv.second);
+  }
+  nnvm::Specialize(pg.get(), kwargs_any);
+  API_END();
+}
+
+int MXGraphGetGlobalAttrJSON(GraphHandle graph,
+                             const char *key,
+                             const char **out) {
+  using namespace nnvm;
+  MXAPIThreadLocalEntry *ret = MXAPIThreadLocalStore::Get();
+  API_BEGIN();
+  GraphPtr pg = *static_cast<GraphPtr*>(graph);
+  std::string skey(key);
+  auto it = pg->global_attrs.find(skey);
+  *out = "";
+  if (it != pg->global_attrs.end()) {
+    std::ostringstream oss;
+    dmlc::JSONWriter writer(&oss);
+    writer.Write(*it->second.get());
+    ret->ret_str = oss.str();
+    *out = (ret->ret_str).c_str();
+  }
+  API_END();
+}
+
+int MXGraphGetNodeAttrJSON(GraphHandle graph,
+                           const char *key,
+                           const char **out) {
+  using namespace nnvm;
+  MXAPIThreadLocalEntry *ret = MXAPIThreadLocalStore::Get();
+  API_BEGIN();
+  GraphPtr pg = *static_cast<GraphPtr*>(graph);
+  std::string skey(key);
+  *out = "";
+  if (pg->node_attrs.count(skey)) {
+    std::ostringstream oss;
+    dmlc::JSONWriter writer(&oss);
+    pg->node_attrs.SaveColumn(skey, &writer);
+    ret->ret_str = oss.str();
+    *out = (ret->ret_str).c_str();
+  }
+  API_END();
+}
+
+int MXGraphGetNodeEntryAttrJSON(GraphHandle graph,
+                                const char *key,
+                                const char **out) {
+  API_BEGIN();
+  // TODO(minjie)
+  API_END();
+}
+
 int MXSymbolCreateGraphSymbol(GraphHandle ghdl,
                               mx_uint num_param,
                               const char **keys,

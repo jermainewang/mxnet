@@ -2,12 +2,13 @@
 from __future__ import absolute_import
 
 import ctypes
+import json
 import os as _os
 import sys as _sys
 
 from .attribute import AttrScope
 from .base import _LIB
-from .base import check_call, c_array, c_str, mx_uint
+from .base import check_call, c_array, c_str, mx_uint, py_str
 from .base import GraphHandle, SymbolHandle
 from .symbol import Symbol, Variable
 from .name import NameManager
@@ -64,6 +65,33 @@ class Graph(object):
     def list_arguments(self):
         return self._symbol.list_arguments()
 
+    def get_global_attr(self, key):
+        ret = ctypes.c_char_p()
+        check_call(_LIB.MXGraphGetGlobalAttrJSON(
+            self._handle, c_str(key), ctypes.byref(ret)))
+        json_str = py_str(ret.value)
+        return json.loads(json_str)
+
+    def get_node_attr(self, key):
+        ret = ctypes.c_char_p()
+        check_call(_LIB.MXGraphGetNodeAttrJSON(
+            self._handle, c_str(key), ctypes.byref(ret)))
+        json_str = py_str(ret.value)
+        return json.loads(json_str)
+
+    def specialize(self, **kwargs):
+        keys = []
+        vals = []
+        for k, v in kwargs.items():
+            keys.append(c_str(k))
+            vals.append(c_str(str(v)))
+        keys = c_array(ctypes.c_char_p, keys)
+        vals = c_array(ctypes.c_char_p, vals)
+        check_call(_LIB.MXGraphSpecialize(
+            self._handle,
+            mx_uint(len(keys)),
+            keys, vals))
+
 def symbolize(graph):
     def _graph_symbol_creator(sym_inputs=None, name=None, attr=None, **kwargs):
         if sym_inputs is not None:
@@ -81,7 +109,7 @@ def symbolize(graph):
                 sym_kwargs[k] = v
             else:
                 keys.append(c_str(k))
-                vals.append(c_str(v))
+                vals.append(c_str(str(v)))
 
         sym_handle = SymbolHandle()
         keys = c_array(ctypes.c_char_p, keys)
