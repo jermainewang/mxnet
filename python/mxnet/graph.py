@@ -5,6 +5,7 @@ import ctypes
 import json
 import os as _os
 import sys as _sys
+from io import StringIO
 
 from .attribute import AttrScope
 from .base import _LIB
@@ -34,22 +35,10 @@ def _create_graph_handle(symbol):
         ctypes.byref(ghandle)))
     return ghandle
 
-def _fill_missing_symbol_inputs(graph, sym_name, provided_args, provided_kwargs):
-    if provided_args is None:
-        # No need to fill in the kwargs from args.
-        return
-    required_args = graph.list_arguments()
-    for i, name in enumerate(required_args):
-        if i < len(provided_args):
-            assert not name in provided_kwargs, \
-                'Argument "%s" is specified twice' % name
-            provided_kwargs[name] = provided_args[i]
-
 class Graph(object):
-    def __init__(self, symbol, name=None):
-        self._symbol = symbol
+    def __init__(self, handle, name=None):
+        self._handle = handle
         self._name = NameManager.current.get(name, 'graph')
-        self._handle = _create_graph_handle(symbol)
 
     @property
     def handle(self):
@@ -61,9 +50,6 @@ class Graph(object):
 
     def __del__(self):
         check_call(_LIB.MXGraphFree(self.handle));
-
-    def list_arguments(self):
-        return self._symbol.list_arguments()
 
     def get_global_attr(self, key):
         ret = ctypes.c_char_p()
@@ -84,7 +70,9 @@ class Graph(object):
         vals = []
         for k, v in kwargs.items():
             keys.append(c_str(k))
-            vals.append(c_str(str(v)))
+            io = StringIO()
+            json.dump(v, io)
+            vals.append(c_str(io.getvalue()))
         keys = c_array(ctypes.c_char_p, keys)
         vals = c_array(ctypes.c_char_p, vals)
         check_call(_LIB.MXGraphSpecialize(
@@ -92,14 +80,35 @@ class Graph(object):
             mx_uint(len(keys)),
             keys, vals))
 
-def symbolize(graph):
-    def _graph_symbol_creator(sym_inputs=None, name=None, attr=None, **kwargs):
-        if sym_inputs is not None:
-            if not isinstance(sym_inputs, list):
-                sym_inputs = [sym_inputs]
-            assert all([isinstance(ele, SymbolBase) for ele in sym_inputs]), \
-                'Argument "sym_inputs" must be a list of symbols.'
+    def transform(self, pass_names, **kwargs):
+        passes = [c_str(n) for n in pass_names]
+        passes = c_array(ctypes.c_char_p, passes)
+        keys = []
+        vals = []
+        for k, v in kwargs.items():
+            keys.append(c_str(k))
+            io = StringIO()
+            json.dump(v, io)
+            vals.append(c_str(io.getvalue()))
+        keys = c_array(ctypes.c_char_p, keys)
+        vals = c_array(ctypes.c_char_p, vals)
+        out = GraphHandle()
+        check_call(_LIB.MXGraphTransform(
+            self._handle,
+            mx_uint(len(passes)),
+            passes,
+            mx_uint(len(keys)),
+            keys, vals,
+            ctypes.byref(out)))
+        return Graph(out)
 
+def create(symbol, name=None):
+    handle = _create_graph_handle(symbol)
+    return Graph(handle, name)
+
+def symbolize(graph):
+    """Currently graph symbol only allows keyword arguments for composition."""
+    def _graph_symbol_creator(name=None, attr=None, **kwargs):
         kwargs.update(AttrScope.current.get(attr))
         keys = []
         vals = []
@@ -122,7 +131,6 @@ def symbolize(graph):
 
         ret = Symbol(sym_handle)
         name = NameManager.current.get(name, graph.name)
-        _fill_missing_symbol_inputs(graph, name, sym_inputs, sym_kwargs)
         ret._compose(name=name, **sym_kwargs)
         return ret
     return _graph_symbol_creator

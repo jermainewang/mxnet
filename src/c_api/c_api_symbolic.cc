@@ -560,17 +560,19 @@ int MXSymbolGrad(SymbolHandle sym, mx_uint num_wrt, const char** wrt, SymbolHand
 }
 
 /////////////// Subgraph APIs
-int MXGraphCreate(SymbolHandle symbol, GraphHandle *graph) {
-  using namespace nnvm;
+int MXGraphCreate(SymbolHandle symbol, GraphHandle *out) {
+  using nnvm::GraphPtr;
+  using nnvm::Graph;
+  using nnvm::Symbol;
   GraphPtr* pg = new GraphPtr();
   *pg = Graph::Create();
   API_BEGIN();
   (*pg)->outputs = static_cast<Symbol*>(symbol)->outputs;
-  *graph = pg;
+  *out = pg;
   API_END_HANDLE_ERROR(delete pg;);
 }
 int MXGraphFree(GraphHandle graph) {
-  using namespace nnvm;
+  using nnvm::GraphPtr;
   API_BEGIN();
   delete static_cast<GraphPtr*>(graph);
   API_END();
@@ -579,7 +581,8 @@ int MXGraphSpecialize(GraphHandle graph,
                       mx_uint num_param,
                       const char **keys,
                       const char **vals) {
-  using namespace nnvm;
+  using nnvm::GraphPtr;
+  using nnvm::any;
   API_BEGIN();
   GraphPtr pg = *static_cast<GraphPtr*>(graph);
   const auto& kwargs = _ExtractSymbolKWArgs(num_param, keys, vals);
@@ -590,11 +593,38 @@ int MXGraphSpecialize(GraphHandle graph,
   nnvm::Specialize(pg.get(), kwargs_any);
   API_END();
 }
-
+int MXGraphTransform(GraphHandle graph,
+                     mx_uint num_passes,
+                     const char **pass_names,
+                     mx_uint num_param,
+                     const char **keys,
+                     const char **vals,
+                     GraphHandle *out) {
+  using nnvm::GraphPtr;
+  using nnvm::Graph;
+  using nnvm::any;
+  GraphPtr* pp_out_graph = new GraphPtr();
+  *pp_out_graph = Graph::Create();
+  API_BEGIN();
+  GraphPtr p_in_graph = *static_cast<GraphPtr*>(graph);
+  std::vector<std::string> passes;
+  passes.reserve(num_passes);
+  for (nn_uint i = 0; i < num_passes; ++i) {
+    passes.push_back(std::string(pass_names[i]));
+  }
+  const auto& kwargs = _ExtractSymbolKWArgs(num_param, keys, vals);
+  std::unordered_map<std::string, std::shared_ptr<any>> kwargs_any;
+  for (const auto& kv : kwargs) {
+    kwargs_any[kv.first] = std::make_shared<any>(kv.second);
+  }
+  **pp_out_graph = nnvm::Transform(*p_in_graph, passes, kwargs_any);
+  *out = pp_out_graph;
+  API_END_HANDLE_ERROR(delete pp_out_graph;);
+}
 int MXGraphGetGlobalAttrJSON(GraphHandle graph,
                              const char *key,
                              const char **out) {
-  using namespace nnvm;
+  using nnvm::GraphPtr;
   MXAPIThreadLocalEntry *ret = MXAPIThreadLocalStore::Get();
   API_BEGIN();
   GraphPtr pg = *static_cast<GraphPtr*>(graph);
@@ -643,11 +673,12 @@ int MXSymbolCreateGraphSymbol(GraphHandle ghdl,
                               const char **keys,
                               const char **vals,
                               SymbolHandle *out) {
-  using namespace nnvm;
+  using nnvm::Symbol;
+  using nnvm::GraphPtr;
   Symbol *s = new Symbol();
   API_BEGIN();
   GraphPtr* pg = static_cast<GraphPtr*>(ghdl);
-  *s = nnvm::Symbol::CreateFunctor(*pg, _ExtractSymbolKWArgs(num_param, keys, vals));
+  *s = Symbol::CreateFunctor(*pg, _ExtractSymbolKWArgs(num_param, keys, vals));
   *out = s;
   API_END_HANDLE_ERROR(delete s;);
 }
