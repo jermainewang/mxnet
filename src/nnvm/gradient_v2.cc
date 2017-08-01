@@ -501,10 +501,6 @@ Graph GradientRec(const Graph& fwd_graph,
     }
     // Compute input gradients.
     const vector<NodeEntry>& in_grads = fgrad(node, out_grads);
-    LOG(INFO) << "Grad node: " << node->attrs.name;
-    for (const auto& e : node->inputs) {
-      LOG(INFO) << "\tinput: " << e.node->attrs.name;
-    }
     CHECK_EQ(node->inputs.size(), in_grads.size())
         << "Gradient function for node \"" << node->attrs.name
         << "\" does not return enough gradient entries.";
