@@ -12,11 +12,24 @@ def _conv_block():
     g = graph.create(net)
     return g
 
-def _conv_block_specialize_grad():
+def _conv_block_with_grad():
     g = _conv_block()
-    xs = []
-    ys = []
-    return g.transform()
+    '''
+    xs = [{'node': 0, 'index': 0},  # data
+          {'node': 1, 'index': 0},  # conv_weight
+          {'node': 2, 'index': 0},  # conv_bias
+          {'node': 4, 'index': 0},  # bn_gamma
+          {'node': 5, 'index': 0}]  # bn_beta
+    ys = [{'node': 10, 'index': 0}] # pool
+    args = {'xs' : xs, 'ys' : ys, 'full_graph' : 0}
+    '''
+    # Compute gradients for all inputs using all outputs.
+    # The gradient graph is also generated separately.
+    xs_blacklist = [{'node': 6},  # bn_moving_mean
+                    {'node': 7}]  # bn_moving_var
+    args = {'xs_blacklist' : xs_blacklist}
+    g = g.transform(["MXGradient"], mx_gradient_args=args)
+    return g
 
 def test_conv_compose_no_share():
     """
@@ -92,13 +105,26 @@ def test_specialize_coloring():
     print(net_graph.get_node_attr("node_colors"))
 
 def test_transform_grad():
-    g = _conv_block()
-    xs = [{'node': 1, 'index': 0},  # conv_weight
-          {'node': 2, 'index': 0},  # conv_bias
-          {'node': 4, 'index': 0},  # bn_gamma
-          {'node': 5, 'index': 0}]  # bn_beta
-    ys = [{'node': 10, 'index': 0}] # pool
-    g = g.transform(["MXNetGradient"], xs=xs, ys=ys)
+    blk_graph = _conv_block_with_grad()
+    blk_graph.specialize(save_dot=True)
+    blk_dot = blk_graph.get_global_attr("dot")[1]
+    print(blk_dot)
+    ConvBlock = graph.symbolize(blk_graph)
+    net = sym.Variable('data')
+    net = ConvBlock(data=net, name='conv1')
+    net = ConvBlock(data=net, name='conv2')
+    net_graph = graph.create(net)
+    xs_blacklist = [{'node': 0},  # data
+                    {'node': 5},  # conv1_bn_moving_mean
+                    {'node': 6},  # conv1_bn_moving_var
+                    {'node': 12}, # conv2_bn_moving_mean
+                    {'node': 13}] # conv2_bn_moving_var
+    args = {'xs_blacklist' : xs_blacklist, 'full_graph' : 1}
+    net_graph = net_graph.transform(["MXGradient"], mx_gradient_args=args)
+    net_graph.specialize(save_dot=True)
+    net_dot = net_graph.get_global_attr("dot")[1]
+    print(net_dot)
+
 
 if __name__ == '__main__':
     test_conv_compose_no_share()

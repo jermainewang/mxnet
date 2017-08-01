@@ -184,7 +184,7 @@ inline vector<NodeEntry> FetchSumGradients(vector<GradEntry>& ent) {
 void SplitForwardBackward(
     const vector<NodeEntry>& in_grads,
     const IndexedGraph& fwd_graph_idx,
-    NodeEntryMap<NodeEntry>* fwdoutent2bwdinent) {
+    NodeEntryMap<NodeEntry>* fwdent2bwdent) {
   unordered_set<const Node*> visited;
   queue<Node*> search;
   for (const NodeEntry& e : in_grads) {
@@ -208,21 +208,27 @@ void SplitForwardBackward(
       if (fwd_graph_idx.exist(in_node.get())) {
         // The entry is between two forward and backward nodes.
         // Replace the entry with a variable input.
-        if (!fwdoutent2bwdinent->count(in_ent)) {
+        if (!fwdent2bwdent->count(in_ent)) {
           ostringstream oss;
-          oss << in_node->attrs.name << "$" << "output" << in_ent.index;
+          if (in_node->is_variable()) {
+            oss << in_node->attrs.name;
+          } else {
+            oss << in_node->attrs.name << "$" << "output" << in_ent.index;
+          }
           NodePtr new_in_node = Node::Create();
           new_in_node->attrs.op = nullptr;
           new_in_node->attrs.name = oss.str();
-          fwdoutent2bwdinent->insert({in_ent,  NodeEntry{new_in_node, 0, 0}});
+          fwdent2bwdent->insert({in_ent,  NodeEntry{new_in_node, 0, 0}});
         }
-        node->inputs[i] = fwdoutent2bwdinent->at(in_ent);
+        node->inputs[i] = fwdent2bwdent->at(in_ent);
       } else {
         // Traverse the input.
         search.push(in_node.get());
       }
     }
-    // XXX(minjie): Remove control dependencies to forward graph?
+    // XXX(minjie): Remove control dependencies to forward graph? This should be
+    // fine since the backward subgraph will also have a control dependency to
+    // the forward subgraph.
     auto& cdeps = node->control_deps;
     cdeps.erase(std::remove_if(cdeps.begin(),
                                cdeps.end(), 
@@ -233,52 +239,210 @@ void SplitForwardBackward(
   }
 }
 
-struct InputEntryInfo {
+struct GradNodeInEntry {
+  enum Type {
+    kFromGradOut = 0,
+    kFromFwdOut,
+    kFromFwdIn,
+  };
   // Whether the input should be fetched from out_grads. If false, the input entry
   // should be fetched from forward outputs.
-  bool from_out_grads = false;
+  int type = -1;
   // The index of the entry to fetch from. If `from_out_grads` is true, the input
   // should be fetched from out_grads[index]; otherwise, it should be fetched from
   // forward_outputs[index].
   size_t index = 0;
   
-  inline static InputEntryInfo CreateFromOutGrads(size_t idx) {
-    InputEntryInfo ret;
-    ret.from_out_grads = true;
+  inline static GradNodeInEntry CreateFromOutGrads(size_t idx) {
+    GradNodeInEntry ret;
+    ret.type = kFromGradOut;
     ret.index = idx;
     return ret;
   }
 
-  inline static InputEntryInfo CreateFromForward(size_t idx) {
-    InputEntryInfo ret;
+  inline static GradNodeInEntry CreateFromForwardOut(size_t idx) {
+    GradNodeInEntry ret;
+    ret.type = kFromFwdOut;
     ret.index = idx;
+    return ret;
+  }
+
+  inline static GradNodeInEntry CreateFromForwardIn(size_t idx) {
+    GradNodeInEntry ret;
+    ret.type = kFromFwdIn;
+    ret.index = idx;
+    return ret;
+  }
+};
+
+struct GradNodeOutEntry {
+  enum Type {
+    kFromZero = 0,
+    kFromOut,
+  };
+  int type = -1;
+  size_t index = 0;
+
+  inline static GradNodeOutEntry CreateFromBackwardOut(size_t idx) {
+    GradNodeOutEntry ret;
+    ret.type = kFromOut;
+    ret.index = idx;
+    return ret;
+  }
+
+  inline static GradNodeOutEntry CreateFromZero() {
+    GradNodeOutEntry ret;
+    ret.type = kFromZero;
     return ret;
   }
 };
 
 }  // namespace
 
+struct MXEntryArg {
+  uint32_t node = 0;
+  uint32_t index = 0;
+  uint32_t version = 0;
+  void Load(dmlc::JSONReader *reader) {
+    dmlc::JSONObjectReadHelper helper;
+    helper.DeclareField("node", &node);
+    helper.DeclareOptionalField("index", &index);
+    helper.DeclareOptionalField("version", &version);
+    helper.ReadAllFields(reader);
+  }
+};
+
+struct MXGradientArgs {
+  // The targets to be differentiated. If none is given,
+  // all the input entries will be included.
+  // Note: Only one of "xs" and "xs_blacklist" should be provided.
+  // If none is provided, blacklist rule is applied.
+  vector<MXEntryArg> xs;
+  // Alternative way to specify the gradable targets. The list
+  // specifies which input entries do NOT need to be differentiated.
+  // Note: Only one of "xs" and "xs_blacklist" should be provided.
+  // If none is provided, blacklist rule is applied.
+  vector<MXEntryArg> xs_blacklist;
+
+  // The objective entries to compute gradients from. If none is
+  // given, all the output entries will be included.
+  // Note: Only one of "ys" and "ys_blacklist" should be provided.
+  // If none is provided, blacklist rule is applied.
+  vector<MXEntryArg> ys;
+  // Alternative way to specify the objective entries. The list
+  // specifies which objective entries are NOT included in gradient
+  // computation.
+  // Note: Only one of "ys" and "ys_blacklist" should be provided.
+  // If none is provided, blacklist rule is applied.
+  vector<MXEntryArg> ys_blacklist;
+
+  // Whether generate full graph instead of seperating the gradient
+  // as a subgraph.
+  bool full_graph = false;
+
+  void Load(dmlc::JSONReader *reader) {
+    dmlc::JSONObjectReadHelper helper;
+    helper.DeclareOptionalField("xs", &xs);
+    helper.DeclareOptionalField("xs_blacklist", &xs_blacklist);
+    helper.DeclareOptionalField("ys", &ys);
+    helper.DeclareOptionalField("ys_blacklist", &ys_blacklist);
+    helper.DeclareOptionalField("full_graph", &full_graph);
+    helper.ReadAllFields(reader);
+  }
+};
+
+inline MXGradientArgs LoadArgs(const string& json_str) {
+  MXGradientArgs ret;
+  istringstream is(json_str);
+  dmlc::JSONReader reader(&is);
+  reader.Read(&ret);
+  return ret;
+}
+
+const vector<IndexedGraph::NodeEntry> ExtractXS(
+    const IndexedGraph& idx, const MXGradientArgs& args) {
+  CHECK(args.xs.empty() || args.xs_blacklist.empty())
+    << "Only one of \"xs\" and \"xs_blacklist\" arguments should be provided.";
+  vector<IndexedGraph::NodeEntry> xs;
+  if (args.xs.empty()) {
+    // Blacklist rule.
+    for (const uint32_t nid : idx.input_nodes()) {
+      const Node* node = idx[nid].source;
+      for (uint32_t i = 0; i < node->num_outputs(); ++i) {
+        bool blacked = false;
+        for (const auto& ent : args.xs_blacklist) {
+          if (ent.node == nid && ent.index == i) {  // XXX: version?
+            blacked = true;
+            break;
+          }
+        }
+        if (!blacked) {
+          xs.emplace_back(IndexedGraph::NodeEntry{nid, i, 0});
+        }
+      }
+    }
+  } else {
+    // Whitelist rule.
+    for (const auto& ent : args.xs) {
+      xs.emplace_back(IndexedGraph::NodeEntry{ent.node, ent.index, ent.version});
+    }
+  }
+  return xs;
+}
+
+const vector<IndexedGraph::NodeEntry> ExtractYS(
+    const IndexedGraph& idx, const MXGradientArgs& args) {
+  CHECK(args.ys.empty() || args.ys_blacklist.empty())
+    << "Only one of \"ys\" and \"ys_blacklist\" arguments should be provided.";
+  vector<IndexedGraph::NodeEntry> ys;
+  if (args.ys.empty()) {
+    // Blacklist rule.
+    for (const auto& out_ent : idx.outputs()) {
+      bool blacked = false;
+      for (const auto& ent : args.ys_blacklist) {
+        if (ent.node == out_ent.node_id && ent.index == out_ent.index) {  // XXX: version?
+          blacked = true;
+          break;
+        }
+      }
+      if (!blacked) {
+        ys.emplace_back(out_ent);
+      }
+    }
+  } else {
+    // Whitelist rule.
+    for (const auto& ent : args.ys) {
+      ys.emplace_back(IndexedGraph::NodeEntry{ent.node, ent.index, ent.version});
+    }
+  }
+  return ys;
+}
+
 Graph GradientRec(const Graph& fwd_graph,
-                 const vector<IndexedGraph::NodeEntry>& xs,
-                 const vector<IndexedGraph::NodeEntry>& ys) {
+                  const MXGradientArgs& args) {
   using nnvm::FGradient;
   static auto& op_fgrad_map = Op::GetAttr<FGradient>("FGradient");
 
   if (fwd_graph.global_attrs.count("FGradient")) {
+    // XXX: What if the gradient function is called twice but with different
+    // arguments?
     return fwd_graph;
   }
 
   const auto& fwd_graph_idx = fwd_graph.indexed_graph();
+  const auto& xs = ExtractXS(fwd_graph_idx, args);
+  const auto& ys = ExtractYS(fwd_graph_idx, args);
+
   // The map contains how the forward output is fed into backward graph.
   // The key is the output entry in the forward graph. The value is the
   // in input entry in the backward graph it corresponds to.
-  NodeEntryMap<NodeEntry> fwdoutent2bwdinent;
-  unordered_map<const Node*, InputEntryInfo> inent_map;
+  NodeEntryMap<NodeEntry> fwdent2bwdent;
+  unordered_map<const Node*, GradNodeInEntry> inent_map;
   // Maintain a mapping from a node to its output gradient entries.
   unordered_map<const Node*, vector<GradEntry> > node2outgrads;
 
   // Topological order of all nodes.
-  // XXX(minjie): A better way is to dfs only the related nodes.
+  // XXX(minjie): An ideal way is to dfs only the dependent nodes.
   // However, I cannot find a good way to convert from IndexedGraph::NodeEntry
   // to nnvm::NodeEntry.
   vector<NodePtr> topo_order;
@@ -300,7 +464,7 @@ Graph GradientRec(const Graph& fwd_graph,
     ys_grad_var->attrs.name = oss.str();
     node2outgrads.at(ys_node)[ys[i].index].AddGrad(
         NodeEntry{ys_grad_var, 0, 0});
-    inent_map.insert({ys_grad_var.get(), InputEntryInfo::CreateFromOutGrads(i)});
+    inent_map.insert({ys_grad_var.get(), GradNodeInEntry::CreateFromOutGrads(i)});
   }
 
   // Traverse in reverse topological order to compute input gradients of each node.
@@ -337,9 +501,16 @@ Graph GradientRec(const Graph& fwd_graph,
     }
     // Compute input gradients.
     const vector<NodeEntry>& in_grads = fgrad(node, out_grads);
+    LOG(INFO) << "Grad node: " << node->attrs.name;
+    for (const auto& e : node->inputs) {
+      LOG(INFO) << "\tinput: " << e.node->attrs.name;
+    }
     CHECK_EQ(node->inputs.size(), in_grads.size())
-        << "Gradient function not returning enough gradient";
-    SplitForwardBackward(in_grads, fwd_graph_idx, &fwdoutent2bwdinent);
+        << "Gradient function for node \"" << node->attrs.name
+        << "\" does not return enough gradient entries.";
+    if (!args.full_graph) {
+      SplitForwardBackward(in_grads, fwd_graph_idx, &fwdent2bwdent);
+    }
     // Save input gradients.
     for (size_t i = 0; i < node->inputs.size(); ++i) {
       const NodeEntry& in_ent = node->inputs[i];
@@ -356,6 +527,10 @@ Graph GradientRec(const Graph& fwd_graph,
     GradEntry& ge = node2outgrads.at(n)[e.index];
     grad_g->outputs.push_back(ge.GetSum());
   }
+  if (args.full_graph) {
+    // The returned full graph will not be splitted into forward and backward parts.
+    return *grad_g;
+  }
 
   // Create new forward graph.
   // 1. First inserts visible outputs.
@@ -365,18 +540,22 @@ Graph GradientRec(const Graph& fwd_graph,
     const NodeEntry& outent = fwd_graph.outputs[idx];
     new_fwd_graph.outputs.push_back(outent);
     all_fwd_outputs.insert(outent);
-    if (fwdoutent2bwdinent.count(outent)) {
-      const Node* bwdvar = fwdoutent2bwdinent[outent].node.get();
-      inent_map[bwdvar] = InputEntryInfo::CreateFromForward(idx);
+    if (fwdent2bwdent.count(outent)) {
+      const Node* bwdvar = fwdent2bwdent[outent].node.get();
+      inent_map[bwdvar] = GradNodeInEntry::CreateFromForwardOut(idx);
     }
   }
   // 2. Add an attribute to the graph about visible outputs.
   new_fwd_graph.global_attrs["num_visible_outputs"] = std::make_shared<any>(
       fwd_graph.outputs.size());
   // 3. Insert invisible outputs (required by gradient graph).
-  for (const auto& kv : fwdoutent2bwdinent) {
+  for (const auto& kv : fwdent2bwdent) {
     const NodeEntry& fwd_ent = kv.first;
     if (all_fwd_outputs.count(fwd_ent)) {
+      continue;
+    }
+    if (fwd_ent.node->is_variable()) {
+      // This is the input of the forward graph.
       continue;
     }
     // New forward output entry.
@@ -384,11 +563,29 @@ Graph GradientRec(const Graph& fwd_graph,
     const size_t idx = new_fwd_graph.outputs.size();
     new_fwd_graph.outputs.push_back(fwd_ent);
     const Node* bwdvar = kv.second.node.get();
-    inent_map[bwdvar] = InputEntryInfo::CreateFromForward(idx);
+    inent_map[bwdvar] = GradNodeInEntry::CreateFromForwardOut(idx);
   }
+  
+  const auto& new_fwd_graph_idx = new_fwd_graph.indexed_graph();
 
-  // Create input entry vector for gradient graph.
-  vector<InputEntryInfo> inent_info;
+  // Understand how the input entries of the gradient graph come from.
+  vector<GradNodeInEntry> inent_info;
+  // 1. Come from the inputs of the forward graph.
+  const vector<uint32_t>& new_fwd_in_nodes = new_fwd_graph_idx.input_nodes();
+  for (const auto& kv : fwdent2bwdent) {
+    const NodeEntry& fwd_ent = kv.first;
+    if (fwd_ent.node->is_variable()) {
+      const uint32_t nid = new_fwd_graph_idx.node_id(fwd_ent.node.get());
+      const auto it = std::find(new_fwd_in_nodes.begin(),
+                                new_fwd_in_nodes.end(),
+                                nid);
+      CHECK(it != new_fwd_in_nodes.end());
+      const size_t idx = it - new_fwd_in_nodes.begin();
+      const Node* bwdvar = kv.second.node.get();
+      inent_map[bwdvar] = GradNodeInEntry::CreateFromForwardIn(idx);
+    }
+  }
+  // 2. Come from the outputs of the forward graph (both visible and invisible).
   const auto& grad_g_idx = grad_g->indexed_graph();
   for (const uint32_t grad_in_nid : grad_g_idx.input_nodes()) {
     const Node* grad_in_node = grad_g_idx[grad_in_nid].source;
@@ -399,28 +596,64 @@ Graph GradientRec(const Graph& fwd_graph,
     inent_info.push_back(std::move(inent_map[grad_in_node]));
   }
 
-  // Register FGradient for the graph. Note that all closure must be passed by value.
-  FGradient graph_fgrad = [grad_g, inent_info]
+  // Create how the output entry of the gradient values come from.
+  vector<GradNodeOutEntry> outent_info;
+  unordered_map<uint32_t, size_t> bwdoutnid2index;
+  for (size_t i = 0; i < xs.size(); ++i) {
+    bwdoutnid2index[xs[i].node_id] = i;
+  }
+  for (const uint32_t fwd_in_nid : new_fwd_graph_idx.input_nodes()) {
+    if (bwdoutnid2index.count(fwd_in_nid)) {
+      const size_t bwdidx = bwdoutnid2index[fwd_in_nid];
+      outent_info.emplace_back(GradNodeOutEntry::CreateFromBackwardOut(bwdidx));
+    } else {
+      outent_info.emplace_back(GradNodeOutEntry::CreateFromZero());
+    }
+  }
+
+  // Register FGradient for the graph. Note that all local variables must be passed by value.
+  FGradient graph_fgrad = [grad_g, inent_info, outent_info]
     (const NodePtr& fwd_node, const vector<NodeEntry>& out_grads) {
       CHECK(fwd_node->is_graph());
       NodePtr grad_node = Node::Create();
+      grad_node->attrs.name = fwd_node->attrs.name + "/backward";
       grad_node->attrs.graph = grad_g;
       // Insert inputs.
       for (const auto& info : inent_info) {
-        if (info.from_out_grads) {
+        switch (info.type) {
+        case GradNodeInEntry::kFromGradOut:
           CHECK_LT(info.index, out_grads.size());
           grad_node->inputs.emplace_back(out_grads[info.index]);
-        } else {
+          break;
+        case GradNodeInEntry::kFromFwdOut:
           grad_node->inputs.emplace_back(
               NodeEntry{fwd_node, static_cast<uint32_t>(info.index), 0});
+          break;
+        case GradNodeInEntry::kFromFwdIn:
+          grad_node->inputs.emplace_back(fwd_node->inputs[info.index]);
+          break;
+        default:
+          LOG(FATAL) << "Cannot differentiate the subgraph.";
         }
       }
       // XXX(minjie): Add control dependency from the grad node to its forward node.
       // This can be used later to fetch attributes of the forward node.
       grad_node->control_deps.push_back(fwd_node);
       vector<NodeEntry> ret;
-      for (uint32_t i = 0; i < grad_g->outputs.size(); ++i) {
-        ret.emplace_back(NodeEntry{grad_node, i, 0});
+      auto zero_node = Node::Create();
+      zero_node->attrs.op = kZeroOps[0];
+      zero_node->attrs.name = "_NoGradient";
+      for (const auto& info : outent_info) {
+        switch (info.type) {
+        case GradNodeOutEntry::kFromZero:
+          ret.emplace_back(NodeEntry{zero_node, 0, 0});
+          break;
+        case GradNodeOutEntry::kFromOut:
+          ret.emplace_back(NodeEntry{grad_node, static_cast<uint32_t>(info.index), 0});
+          break;
+        default:
+          LOG(FATAL) << "Cannot differentiate the subgraph.";
+        }
       }
       return ret;
     };
@@ -429,34 +662,16 @@ Graph GradientRec(const Graph& fwd_graph,
   return new_fwd_graph;
 }
 
-struct JSONEntryArg {
-  uint32_t node = 0;
-  uint32_t index = 0;
-  void Load(dmlc::JSONReader *reader) {
-    dmlc::JSONObjectReadHelper helper;
-    helper.DeclareField("node", &node);
-    helper.DeclareField("index", &index);
-    helper.ReadAllFields(reader);
-  }
-};
+
 
 vector<IndexedGraph::NodeEntry> ExtractEntries(
-    const Graph& graph, const string& json_str) {
-  vector<JSONEntryArg> jargs;
-  istringstream is(json_str);
-  dmlc::JSONReader reader(&is);
-  reader.BeginArray();
-  while (reader.NextArrayItem()) {
-    JSONEntryArg jentry;
-    jentry.Load(&reader);
-    jargs.push_back(jentry);
-  }
+    const Graph& graph, const vector<MXEntryArg>& entry_args) {
   // Convert to IndexGraph::NodeEntry.
   const auto& idx = graph.indexed_graph();
   vector<IndexedGraph::NodeEntry> ret;
-  ret.reserve(jargs.size());
-  for (size_t i = 0; i < jargs.size(); ++i) {
-    const JSONEntryArg& arg = jargs[i];
+  ret.reserve(entry_args.size());
+  for (size_t i = 0; i < entry_args.size(); ++i) {
+    const MXEntryArg& arg = entry_args[i];
     CHECK(arg.node < idx.num_nodes())
       << "Argument Error: invalid node id \"" << arg.node << "\". Only "
       << idx.num_nodes() << " nodes in the graph.";
@@ -465,19 +680,17 @@ vector<IndexedGraph::NodeEntry> ExtractEntries(
   return ret;
 }
 
-Graph MXNetGradient(const Graph& graph) {
-  const auto& xs = ExtractEntries(graph, graph.GetGlobalAttr<string>("xs"));
-  const auto& ys = ExtractEntries(graph, graph.GetGlobalAttr<string>("ys"));
-  return GradientRec(graph, xs, ys);
+Graph MXGradient(const Graph& graph) {
+  const MXGradientArgs& args = LoadArgs(graph.GetGlobalAttr<string>("mx_gradient_args"));
+  return GradientRec(graph, args);
 }
 
 // register pass
-NNVM_REGISTER_PASS(MXNetGradient)
+NNVM_REGISTER_PASS(MXGradient)
 .describe("Return a gradient graph of src.attrs[\"ys\"] wrt src.attrs[\"xs\"]")
-.set_body(MXNetGradient)
+.set_body(MXGradient)
 .set_change_graph(true)
-.depend_global_attr("xs")  // The targets to be differentiated.
-.depend_global_attr("ys")  // The objective entries to start with.
+.depend_global_attr("mx_gradient_args")
 ;
 
 }  // namespace mxnet
