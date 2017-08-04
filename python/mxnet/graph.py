@@ -39,6 +39,7 @@ class Graph(object):
     def __init__(self, handle, name=None):
         self._handle = handle
         self._name = NameManager.current.get(name, 'graph')
+        self._freezed = False
 
     @property
     def handle(self):
@@ -48,6 +49,9 @@ class Graph(object):
     def name(self):
         return self._name
 
+    def freeze(self):
+        self._freezed = True
+
     def __del__(self):
         check_call(_LIB.MXGraphFree(self.handle));
 
@@ -55,15 +59,31 @@ class Graph(object):
         ret = ctypes.c_char_p()
         check_call(_LIB.MXGraphGetGlobalAttrJSON(
             self._handle, c_str(key), ctypes.byref(ret)))
-        json_str = py_str(ret.value)
-        return json.loads(json_str)
+        if ret.value is None:
+            return None
+        else:
+            json_str = py_str(ret.value)
+            return json.loads(json_str)
 
     def get_node_attr(self, key):
         ret = ctypes.c_char_p()
         check_call(_LIB.MXGraphGetNodeAttrJSON(
             self._handle, c_str(key), ctypes.byref(ret)))
-        json_str = py_str(ret.value)
-        return json.loads(json_str)
+        if ret.value is None:
+            return None
+        else:
+            json_str = py_str(ret.value)
+            return json.loads(json_str)
+
+    def get_node_entry_attr(self, key):
+        ret = ctypes.c_char_p()
+        check_call(_LIB.MXGraphGetNodeEntryAttrJSON(
+            self._handle, c_str(key), ctypes.byref(ret)))
+        if ret.value is None:
+            return None
+        else:
+            json_str = py_str(ret.value)
+            return json.loads(json_str)
 
     def specialize(self, **kwargs):
         keys = []
@@ -81,6 +101,8 @@ class Graph(object):
             keys, vals))
 
     def transform(self, pass_names, **kwargs):
+        assert not self._freezed, \
+                'The graph cannot be changed after a GraphSymbol is created.'
         passes = [c_str(n) for n in pass_names]
         passes = c_array(ctypes.c_char_p, passes)
         keys = []
@@ -133,4 +155,5 @@ def symbolize(graph):
         name = NameManager.current.get(name, graph.name)
         ret._compose(name=name, **sym_kwargs)
         return ret
+    graph.freeze()
     return _graph_symbol_creator

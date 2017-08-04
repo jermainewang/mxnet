@@ -3,6 +3,12 @@ import mxnet as mx
 import mxnet.graph as graph
 import mxnet.symbol as sym
 
+def _Viz(dot_str):
+    print(dot_str)
+    with open('tmp.dot', 'w') as f:
+        f.write(dot_str)
+        f.flush()
+
 def _conv_block():
     net = sym.Variable('data')
     net = sym.Convolution(net, name='conv', num_filter=32, kernel=(3,3), stride=(2,2))
@@ -12,7 +18,7 @@ def _conv_block():
     g = graph.create(net)
     return g
 
-def _conv_block_with_grad():
+def _conv_block_with_grad(full_graph=False):
     g = _conv_block()
     '''
     xs = [{'node': 0, 'index': 0},  # data
@@ -21,15 +27,43 @@ def _conv_block_with_grad():
           {'node': 4, 'index': 0},  # bn_gamma
           {'node': 5, 'index': 0}]  # bn_beta
     ys = [{'node': 10, 'index': 0}] # pool
-    args = {'xs' : xs, 'ys' : ys, 'full_graph' : 0}
+    args = {'xs' : xs, 'ys' : ys}
     '''
     # Compute gradients for all inputs using all outputs.
     # The gradient graph is also generated separately.
     xs_blacklist = [{'node': 6},  # bn_moving_mean
                     {'node': 7}]  # bn_moving_var
     args = {'xs_blacklist' : xs_blacklist}
-    g = g.transform(["MXGradient"], mx_gradient_args=args)
+    if full_graph:
+        g = g.transform(["MXGradientFull"], mx_gradient_args=args)
+    else:
+        g = g.transform(["MXGradient"], mx_gradient_args=args)
     return g
+
+def _conv_net():
+    ConvBlock = graph.symbolize(_conv_block())
+    net = sym.Variable('data')
+    net = ConvBlock(data=net, name='conv1')
+    net = ConvBlock(data=net, name='conv2')
+    return graph.create(net)
+
+def _conv_net_with_grad(full_graph=False):
+    ConvBlock = graph.symbolize(_conv_block_with_grad())
+    net = sym.Variable('data')
+    net = ConvBlock(data=net, name='conv1')
+    net = ConvBlock(data=net, name='conv2')
+    net_graph = graph.create(net)
+    xs_blacklist = [{'node': 0},  # data
+                    {'node': 5},  # conv1_bn_moving_mean
+                    {'node': 6},  # conv1_bn_moving_var
+                    {'node': 12}, # conv2_bn_moving_mean
+                    {'node': 13}] # conv2_bn_moving_var
+    args = {'xs_blacklist' : xs_blacklist}
+    if full_graph:
+        net_graph = net_graph.transform(["MXGradientFull"], mx_gradient_args=args)
+    else:
+        net_graph = net_graph.transform(["MXGradient"], mx_gradient_args=args)
+    return net_graph
 
 def test_conv_compose_no_share():
     """
@@ -80,7 +114,7 @@ def test_specialize_json():
     g = _conv_block()
     g.specialize(save_json=True)
     g_json = g.get_global_attr("json")[1]
-    #print(g_json)
+    print(g_json)
     '''
     ConvBlock = graph.symbolize(_conv_block())
     net = sym.Variable('data')
@@ -91,6 +125,7 @@ def test_specialize_json():
     graph_json = net_graph.get_global_attr("json")[1]
     print(graph_json)
     '''
+
 
 def test_specialize_coloring():
     g = _conv_block()
@@ -104,27 +139,51 @@ def test_specialize_coloring():
     net_graph.specialize(color=2)
     print(net_graph.get_node_attr("node_colors"))
 
-def test_transform_grad():
-    blk_graph = _conv_block_with_grad()
-    blk_graph.specialize(save_dot=True)
-    blk_dot = blk_graph.get_global_attr("dot")[1]
-    print(blk_dot)
-    ConvBlock = graph.symbolize(blk_graph)
-    net = sym.Variable('data')
-    net = ConvBlock(data=net, name='conv1')
-    net = ConvBlock(data=net, name='conv2')
-    net_graph = graph.create(net)
-    xs_blacklist = [{'node': 0},  # data
-                    {'node': 5},  # conv1_bn_moving_mean
-                    {'node': 6},  # conv1_bn_moving_var
-                    {'node': 12}, # conv2_bn_moving_mean
-                    {'node': 13}] # conv2_bn_moving_var
-    args = {'xs_blacklist' : xs_blacklist, 'full_graph' : 1}
-    net_graph = net_graph.transform(["MXGradient"], mx_gradient_args=args)
-    net_graph.specialize(save_dot=True)
-    net_dot = net_graph.get_global_attr("dot")[1]
-    print(net_dot)
 
+def test_transform_grad_no_subgraph():
+    g = _conv_block_with_grad(full_graph=True)
+    g.specialize(save_dot=True, save_json=True)
+    print(g.get_global_attr("dot")[1])
+    #print(g.get_global_attr("json")[1])
+
+def test_transform_grad_subgraph():
+    net_graph = _conv_net_with_grad(full_graph=True)
+    net_graph.specialize(save_dot=True, save_json=True)
+    print(net_graph.get_global_attr("dot")[1])
+    #print(net_graph.get_global_attr("json")[1])
+
+
+def test_high_order_grad():
+    x = sym.Variable('x')
+    y = sym.exp(x)
+    g = graph.create(y)
+    g = g.transform(["MXGradientFull"], mx_gradient_args={})
+    g = g.transform(["MXGradientFull"], mx_gradient_args={})
+    # Following will raise error since _backward_mul did not register gradient function.
+    # g = g.transform(["MXGradientFull"], mx_gradient_args={})
+    g.specialize(save_dot=True)
+    print(g.get_global_attr("dot")[1])
+
+
+def test_infer_shape_no_subgraph():
+    # Test no grad
+    g = _conv_block()
+    args = {'shape_inputs' : [[256, 32, 224, 224]]}
+    g.specialize(mx_infer_shape_args=args)
+    print(g.get_node_entry_attr("shape"))
+    # Test with grad
+    g_grad = _conv_block_with_grad(full_graph=True)
+    args = {'shape_inputs' : [[], [256, 32, 224, 224]]}
+    g_grad.specialize(save_dot=True)
+    _Viz(g_grad.get_global_attr("dot")[1])
+    g_grad.specialize(mx_infer_shape_args=args)
+    print(g_grad.get_node_entry_attr("shape"))
+
+def test_infer_shape_subgraph():
+    g = _conv_net()
+    args = {'shape_inputs' : [[256, 32, 224, 224]]}
+    g.specialize(mx_infer_shape_args=args)
+    print(g.get_node_entry_attr("shape"))
 
 if __name__ == '__main__':
     test_conv_compose_no_share()
@@ -132,4 +191,8 @@ if __name__ == '__main__':
     test_specialize_dot()
     #test_specialize_json()
     #test_specialize_coloring()
-    test_transform_grad()
+    test_transform_grad_no_subgraph()
+    test_transform_grad_subgraph()
+    test_high_order_grad()
+    test_infer_shape_no_subgraph()
+    test_infer_shape_subgraph()

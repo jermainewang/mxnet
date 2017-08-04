@@ -644,7 +644,7 @@ int MXGraphGetGlobalAttrJSON(GraphHandle graph,
 int MXGraphGetNodeAttrJSON(GraphHandle graph,
                            const char *key,
                            const char **out) {
-  using namespace nnvm;
+  using nnvm::GraphPtr;
   MXAPIThreadLocalEntry *ret = MXAPIThreadLocalStore::Get();
   API_BEGIN();
   GraphPtr pg = *static_cast<GraphPtr*>(graph);
@@ -663,8 +663,19 @@ int MXGraphGetNodeAttrJSON(GraphHandle graph,
 int MXGraphGetNodeEntryAttrJSON(GraphHandle graph,
                                 const char *key,
                                 const char **out) {
+  using nnvm::GraphPtr;
+  MXAPIThreadLocalEntry *ret = MXAPIThreadLocalStore::Get();
   API_BEGIN();
-  // TODO(minjie)
+  GraphPtr pg = *static_cast<GraphPtr*>(graph);
+  std::string skey(key);
+  *out = "";
+  if (pg->entry_attrs.count(skey)) {
+    std::ostringstream oss;
+    dmlc::JSONWriter writer(&oss);
+    pg->entry_attrs.SaveColumn(skey, &writer);
+    ret->ret_str = oss.str();
+    *out = (ret->ret_str).c_str();
+  }
   API_END();
 }
 
