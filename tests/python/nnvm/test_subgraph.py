@@ -11,24 +11,15 @@ def _Viz(dot_str):
 
 def _conv_block():
     net = sym.Variable('data')
-    net = sym.Convolution(net, name='conv', num_filter=32, kernel=(3,3), stride=(2,2))
+    net = sym.Convolution(net, name='conv', num_filter=32, kernel=(3,3), stride=(1,1), pad=(1,1))
     net = sym.BatchNorm(net, name='bn')
     net = sym.Activation(net, name='relu', act_type='relu')
-    net = sym.Pooling(net, name='pool', kernel=(2,2), stride=(2,2), pool_type='max')
+    #net = sym.Pooling(net, name='pool', kernel=(2,2), stride=(2,2), pool_type='max')
     g = graph.create(net)
     return g
 
 def _conv_block_with_grad(full_graph=False):
     g = _conv_block()
-    '''
-    xs = [{'node': 0, 'index': 0},  # data
-          {'node': 1, 'index': 0},  # conv_weight
-          {'node': 2, 'index': 0},  # conv_bias
-          {'node': 4, 'index': 0},  # bn_gamma
-          {'node': 5, 'index': 0}]  # bn_beta
-    ys = [{'node': 10, 'index': 0}] # pool
-    args = {'xs' : xs, 'ys' : ys}
-    '''
     # Compute gradients for all inputs using all outputs.
     # The gradient graph is also generated separately.
     xs_blacklist = [{'node': 6},  # bn_moving_mean
@@ -168,31 +159,53 @@ def test_high_order_grad():
 def test_infer_shape_no_subgraph():
     # Test no grad
     g = _conv_block()
-    args = {'shape_inputs' : [[256, 32, 224, 224]]}
+    args = {'shape_inputs' : [[256, 32, 100, 100]]}
     g.specialize(mx_infer_shape_args=args)
     print(g.get_node_entry_attr("shape"))
     # Test with grad
     g_grad = _conv_block_with_grad(full_graph=True)
-    args = {'shape_inputs' : [[], [256, 32, 224, 224]]}
+    args = {'shape_inputs' : [[], [256, 32, 100, 100]]}
     g_grad.specialize(save_dot=True)
     _Viz(g_grad.get_global_attr("dot")[1])
     g_grad.specialize(mx_infer_shape_args=args)
     print(g_grad.get_node_entry_attr("shape"))
 
-def test_infer_shape_subgraph():
+def test_infer_shape_subgraph1():
+    # Not pre-specialized.
     g = _conv_net()
-    args = {'shape_inputs' : [[256, 32, 224, 224]]}
+    args = {'shape_inputs' : [[256, 32, 100, 100]]}
     g.specialize(mx_infer_shape_args=args)
     print(g.get_node_entry_attr("shape"))
 
+def test_infer_shape_subgraph2():
+    # Specialized subgraph.
+    g = _conv_block()
+    args = {'shape_inputs' : [[256, 32, 100, 100]]}
+    g.specialize(mx_infer_shape_args=args)
+    ConvBlock = graph.symbolize(g)
+    net = sym.Variable('data')
+    net = ConvBlock(data=net, name='conv1')
+    net = ConvBlock(data=net, name='conv2')
+    net_graph = graph.create(net)
+    net_graph.specialize(mx_infer_shape_args=args)
+    print(net_graph.get_node_entry_attr("shape"))
+
+def test_infer_shape_subgraph_grad1():
+    g = _conv_net_with_grad(full_graph=True)
+    args = {'shape_inputs' : [[], [256, 32, 100, 100]]}
+    g.specialize(mx_infer_shape_args=args)
+    print(g.get_node_entry_attr("shape"))
+    
 if __name__ == '__main__':
     test_conv_compose_no_share()
     test_conv_compose_share()
-    test_specialize_dot()
+    #test_specialize_dot()
     #test_specialize_json()
     #test_specialize_coloring()
-    test_transform_grad_no_subgraph()
-    test_transform_grad_subgraph()
-    test_high_order_grad()
-    test_infer_shape_no_subgraph()
-    test_infer_shape_subgraph()
+    #test_transform_grad_no_subgraph()
+    #test_transform_grad_subgraph()
+    #test_high_order_grad()
+    #test_infer_shape_no_subgraph()
+    #test_infer_shape_subgraph1()
+    #test_infer_shape_subgraph2()
+    test_infer_shape_subgraph_grad1()
