@@ -3,9 +3,9 @@ import mxnet as mx
 import mxnet.graph as graph
 import mxnet.symbol as sym
 
-def _Viz(dot_str):
+def _Viz(dot_str, fname='tmp.dot'):
     print(dot_str)
-    with open('tmp.dot', 'w') as f:
+    with open(fname, 'w') as f:
         f.write(dot_str)
         f.flush()
 
@@ -90,7 +90,7 @@ def test_specialize_dot():
     g = _conv_block()
     g.specialize(save_dot=True)
     g_dot = g.get_global_attr("dot")[1]
-    print(g_dot)
+    _Viz(g_dot, 'blk.dot')
     ConvBlock = graph.symbolize(_conv_block())
     net = sym.Variable('data')
     net = ConvBlock(data=net, name='conv1')
@@ -98,7 +98,7 @@ def test_specialize_dot():
     net_graph = graph.create(net)
     net_graph.specialize(save_dot=True)
     graph_dot = net_graph.get_global_attr("dot")[1]
-    print(graph_dot)
+    _Viz(graph_dot, 'net.dot')
 
 
 def test_specialize_json():
@@ -134,13 +134,13 @@ def test_specialize_coloring():
 def test_transform_grad_no_subgraph():
     g = _conv_block_with_grad(full_graph=True)
     g.specialize(save_dot=True, save_json=True)
-    print(g.get_global_attr("dot")[1])
+    _Viz(g.get_global_attr("dot")[1], 'blk_grad.dot')
     #print(g.get_global_attr("json")[1])
 
 def test_transform_grad_subgraph():
     net_graph = _conv_net_with_grad(full_graph=True)
     net_graph.specialize(save_dot=True, save_json=True)
-    print(net_graph.get_global_attr("dot")[1])
+    _Viz(net_graph.get_global_attr("dot")[1], 'net_grad.dot')
     #print(net_graph.get_global_attr("json")[1])
 
 
@@ -195,6 +195,26 @@ def test_infer_shape_subgraph_grad1():
     args = {'shape_inputs' : [[], [256, 32, 100, 100]]}
     g.specialize(mx_infer_shape_args=args)
     print(g.get_node_entry_attr("shape"))
+
+def test_infer_shape_subgraph_grad2():
+    g = _conv_block_with_grad()
+    args = {'shape_inputs' : [[256, 32, 100, 100]]}
+    g.specialize(mx_infer_shape_args=args)
+    ConvBlock = graph.symbolize(g)
+    net = sym.Variable('data')
+    net = ConvBlock(data=net, name='conv1')
+    net = ConvBlock(data=net, name='conv2')
+    net_graph = graph.create(net)
+    xs_blacklist = [{'node': 0},  # data
+                    {'node': 5},  # conv1_bn_moving_mean
+                    {'node': 6},  # conv1_bn_moving_var
+                    {'node': 12}, # conv2_bn_moving_mean
+                    {'node': 13}] # conv2_bn_moving_var
+    args = {'xs_blacklist' : xs_blacklist}
+    net_graph = net_graph.transform(["MXGradientFull"], mx_gradient_args=args)
+    args = {'shape_inputs' : [[], [256, 32, 100, 100]]}
+    net_graph.specialize(mx_infer_shape_args=args)
+    print(net_graph.get_node_entry_attr("shape"))
     
 if __name__ == '__main__':
     test_conv_compose_no_share()
@@ -208,4 +228,5 @@ if __name__ == '__main__':
     #test_infer_shape_no_subgraph()
     #test_infer_shape_subgraph1()
     #test_infer_shape_subgraph2()
-    test_infer_shape_subgraph_grad1()
+    #test_infer_shape_subgraph_grad1()
+    test_infer_shape_subgraph_grad2()

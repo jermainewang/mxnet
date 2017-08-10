@@ -554,57 +554,78 @@ Graph GradientRec(const Graph& fwd_graph,
   // Create new forward graph.
   // 1. First inserts visible outputs.
   Graph new_fwd_graph;
-  NodeEntrySet all_fwd_outputs;
-  for (size_t idx = 0; idx < fwd_graph.outputs.size(); ++idx) {
-    const NodeEntry& outent = fwd_graph.outputs[idx];
-    new_fwd_graph.outputs.push_back(outent);
-    all_fwd_outputs.insert(outent);
-    if (fwdent2bwdent.count(outent)) {
-      const Node* bwdvar = fwdent2bwdent[outent].node.get();
+  {
+    // TODO(minjie): refactor into a function.
+    NodeEntrySet all_fwd_outputs;
+    for (size_t idx = 0; idx < fwd_graph.outputs.size(); ++idx) {
+      const NodeEntry& outent = fwd_graph.outputs[idx];
+      new_fwd_graph.outputs.push_back(outent);
+      all_fwd_outputs.insert(outent);
+      if (fwdent2bwdent.count(outent)) {
+        const Node* bwdvar = fwdent2bwdent[outent].node.get();
+        inent_map[bwdvar] = GradNodeInInfo::CreateFromForwardOut(idx);
+      }
+    }
+    // 2. Add an attribute to the graph about visible outputs.
+    new_fwd_graph.global_attrs["num_visible_outputs"] = std::make_shared<any>(
+        fwd_graph.outputs.size());
+    // 3. Insert invisible outputs (required by gradient graph).
+    for (const auto& kv : fwdent2bwdent) {
+      const NodeEntry& fwd_ent = kv.first;
+      if (all_fwd_outputs.count(fwd_ent)) {
+        continue;
+      }
+      if (fwd_ent.node->is_variable()) {
+        // This is the input of the forward graph.
+        continue;
+      }
+      // New forward output entry.
+      all_fwd_outputs.insert(fwd_ent);
+      const size_t idx = new_fwd_graph.outputs.size();
+      new_fwd_graph.outputs.push_back(fwd_ent);
+      const Node* bwdvar = kv.second.node.get();
       inent_map[bwdvar] = GradNodeInInfo::CreateFromForwardOut(idx);
     }
   }
-  // 2. Add an attribute to the graph about visible outputs.
-  new_fwd_graph.global_attrs["num_visible_outputs"] = std::make_shared<any>(
-      fwd_graph.outputs.size());
-  // 3. Insert invisible outputs (required by gradient graph).
-  for (const auto& kv : fwdent2bwdent) {
-    const NodeEntry& fwd_ent = kv.first;
-    if (all_fwd_outputs.count(fwd_ent)) {
-      continue;
-    }
-    if (fwd_ent.node->is_variable()) {
-      // This is the input of the forward graph.
-      continue;
-    }
-    // New forward output entry.
-    all_fwd_outputs.insert(fwd_ent);
-    const size_t idx = new_fwd_graph.outputs.size();
-    new_fwd_graph.outputs.push_back(fwd_ent);
-    const Node* bwdvar = kv.second.node.get();
-    inent_map[bwdvar] = GradNodeInInfo::CreateFromForwardOut(idx);
-  }
   const auto& new_fwd_graph_idx = new_fwd_graph.indexed_graph();
 
-  // Create mapping from the entry id in backward subgraph to the entry id in the
-  // forward graph.
-  const uint32_t default_val = new_fwd_graph_idx.num_node_entries();
-  vector<uint32_t> mapping(grad_g_idx.num_node_entries(), default_val);
-  const string& attr_key = "gradient_entry_mapping";
-  for (uint32_t nid = 0; nid < new_fwd_graph_idx.num_nodes(); ++nid) {
-    const Node* fwd_node = new_fwd_graph_idx[nid].source;
-    for (size_t i = 0; i < node2outgrads[fwd_node].size(); ++i) {
-      const NodeEntry& ent = node2outgrads[fwd_node][i].GetSum();
-      const Node* bwd_node = ent.node.get();
-      if (!grad_g_idx.exist(bwd_node)) {
-        continue;
+  // Create mapping between entries that have gradient relations. The mapping
+  // is stored as a vector from backward entry id to forward entry id. 
+  {
+    // TODO(minjie): refactor into a function.
+    const uint32_t default_val = new_fwd_graph_idx.num_node_entries();
+    vector<uint32_t> mapping(grad_g_idx.num_node_entries(), default_val);
+    for (uint32_t nid = 0; nid < new_fwd_graph_idx.num_nodes(); ++nid) {
+      const Node* fwd_node = new_fwd_graph_idx[nid].source;
+      for (size_t i = 0; i < node2outgrads[fwd_node].size(); ++i) {
+        const NodeEntry& ent = node2outgrads[fwd_node][i].GetSum();
+        const Node* bwd_node = ent.node.get();
+        if (!grad_g_idx.exist(bwd_node)) {
+          continue;
+        }
+        const uint32_t bwdeid = grad_g_idx.entry_id(ent);
+        const uint32_t fwdeid = new_fwd_graph_idx.entry_id(nid, i);
+        mapping[bwdeid] = fwdeid;
       }
-      const uint32_t bwdeid = grad_g_idx.entry_id(ent);
-      const uint32_t fwdeid = new_fwd_graph_idx.entry_id(nid, i);
+    }
+    grad_g->global_attrs["gradient_entry_mapping"] =
+      std::make_shared<any>(std::move(mapping));
+  }
+
+  // Create mapping between entries that have feeding relations. The mapping
+  // is stored as a vector from backward entry id to forward entry id.
+  {
+    // TODO(minjie): refactor into a function.
+    const uint32_t default_val = new_fwd_graph_idx.num_node_entries();
+    vector<uint32_t> mapping(grad_g_idx.num_node_entries(), default_val);
+    for (const auto& kv : fwdent2bwdent) {
+      const uint32_t fwdeid = new_fwd_graph_idx.entry_id(kv.first);
+      const uint32_t bwdeid = grad_g_idx.entry_id(kv.second);
       mapping[bwdeid] = fwdeid;
     }
+    grad_g->global_attrs["feed_entry_mapping"] =
+      std::make_shared<any>(std::move(mapping));
   }
-  grad_g->global_attrs[attr_key] = std::make_shared<any>(std::move(mapping));
 
   // Understand how the input entries of the gradient graph come from.
   vector<GradNodeInInfo> inent_info;
@@ -633,7 +654,7 @@ Graph GradientRec(const Graph& fwd_graph,
     inent_info.push_back(std::move(inent_map[grad_in_node]));
   }
 
-  // Create how the output entry of the gradient values come from.
+  // Understand how the output entries of the gradient graph come from.
   vector<GradNodeOutInfo> outent_info;
   unordered_map<uint32_t, size_t> bwdoutnid2index;
   for (size_t i = 0; i < xs.size(); ++i) {
@@ -696,6 +717,7 @@ Graph GradientRec(const Graph& fwd_graph,
     };
 
   new_fwd_graph.global_attrs["FGradient"] = std::make_shared<any>(std::move(graph_fgrad));
+  new_fwd_graph.global_attrs["gradient_graph"] = std::make_shared<any>(grad_g);
   return new_fwd_graph;
 }
 
@@ -735,6 +757,7 @@ NNVM_REGISTER_PASS(MXGradient)
 .depend_global_attr("mx_gradient_args")
 .provide_global_attr("FGradient")
 .provide_global_attr("num_visible_outputs")
+.provide_global_attr("gradient_graph")
 ;
 
 NNVM_REGISTER_PASS(MXGradientFull)

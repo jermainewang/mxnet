@@ -53,26 +53,50 @@ class InferAttrPass {
 
     if (fwd_attr_col != nullptr) {
       CHECK(graph->global_attrs.count("gradient_entry_mapping"));
-      const auto& entry_mapping = graph->GetGlobalAttr<vector<uint32_t>>("gradient_entry_mapping");
-      CHECK_EQ(entry_mapping.size(), idx.num_node_entries());
-      cout << "entry_mapping=[";
-      for (const auto& m : entry_mapping) {
-        cout << m << " ";
-      }
-      cout << "]" << endl;
-      for (uint32_t eid = 0; eid < entry_mapping.size(); ++eid) {
-        const uint32_t fwd_eid = entry_mapping[eid];
+      const auto& grad_mapping =
+        graph->GetGlobalAttr<vector<uint32_t>>("gradient_entry_mapping");
+      CHECK_EQ(grad_mapping.size(), idx.num_node_entries());
+      for (uint32_t eid = 0; eid < grad_mapping.size(); ++eid) {
+        const uint32_t fwd_eid = grad_mapping[eid];
         if (fwd_eid < fwd_attr_col->value.size()) {
-          LOG(INFO) << "Use fwd_eid=" << fwd_eid << " for bwd_eid=" << eid;
+          attr_col->value[eid] = fwd_attr_col->value[fwd_eid];
+        }
+      }
+      CHECK(graph->global_attrs.count("feed_entry_mapping"));
+      const auto& feed_mapping =
+        graph->GetGlobalAttr<vector<uint32_t>>("feed_entry_mapping");
+      CHECK_EQ(feed_mapping.size(), idx.num_node_entries());
+      for (uint32_t eid = 0; eid < feed_mapping.size(); ++eid) {
+        const uint32_t fwd_eid = feed_mapping[eid];
+        if (fwd_eid < fwd_attr_col->value.size()) {
           attr_col->value[eid] = fwd_attr_col->value[fwd_eid];
         }
       }
     }
+    /*LOG(INFO) << "Provided attrs: [";
+    for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
+      for (size_t i = 0; i < idx[nid].source->num_outputs(); ++i) {
+        uint32_t eid = idx.entry_id(nid, i);
+        LOG(INFO) << "\t" << idx[nid].source->attrs.name << " output#" << i << ": " << attr_col->value[eid];
+      }
+    }
+    LOG(INFO) << "]";*/
 
     // TODO(minjie): Only one pass right now. Need multiple passes.
     for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
       LOG(INFO) << "Infer node#" << nid << idx[nid].source->attrs.name;
       InferOneNode(graph, nid, attr_col, fwd_attr_col);
+    }
+
+    // If this is a forward node and its gradient has been specialized. We
+    // also inference the attribute of its backward graph. NOTE: this is
+    // good for attributes that can be determined once forward graph's
+    // attributes are known (e.g. shape, type).
+    if (graph->global_attrs.count("gradient_graph")) {
+      shared_ptr<Graph> grad_g = graph->GetGlobalAttr<shared_ptr<Graph>>("gradient_graph");
+      Column<AttrType>* grad_g_attr =
+        grad_g->CreateOrWriteEntryColumn<AttrType>(attr_name_, empty_val_);
+      this->Infer(grad_g.get(), grad_g_attr, attr_col);
     }
   }
 
@@ -93,28 +117,69 @@ class InferAttrPass {
                 Column<AttrType>* attr) {
     const Node* node = idx[nid].source;
     auto sg = node->graph();
+    const auto& subidx = sg->indexed_graph();
     if (sg->entry_attrs.count(attr_name_)) {
       attr->children[nid] = sg->entry_attrs.GetColumn<AttrType>(attr_name_);
       // Check whether all input attributes are equal.
       for (size_t i = 0; i < node->inputs.size(); ++i) {
         const uint32_t ineid = idx.entry_id(node->inputs[i]);
+        const uint32_t subineid = subidx.entry_id(subidx.input_nodes()[i], 0);
         if (attr->value[ineid] != empty_val_ &&
-            attr->value[ineid] != attr->children[nid]->value[i]) {
+            attr->value[ineid] != attr->children[nid]->value[subineid]) {
           return false;
         }
       }
       // Check whether all output attributes are equal.
-      const uint32_t outent_st = idx.entry_id(nid, 0);
-      const uint32_t outent_ed = outent_st + node->num_outputs();
-      return std::equal(attr->value.begin() + outent_st,
-                        attr->value.begin() + outent_ed,
-                        attr->children[nid]->value.end() - node->num_outputs(),
-                        [this] (const AttrType& a1, const AttrType& a2) {
-                          return a1 == empty_val_ || a1 == a2;
-                        });
+      for (size_t i = 0; i < node->num_outputs(); ++i) {
+        const uint32_t outeid = idx.entry_id(nid, i);
+        const uint32_t subouteid = subidx.entry_id(sg->outputs[i]);
+        if (attr->value[outeid] != empty_val_ &&
+            attr->value[outeid] != attr->children[nid]->value[subouteid]) {
+          return false;
+        }
+      } 
+      return true;
     }
     attr->children[nid] = sg->CreateEntryColumn(empty_val_);
     return false;
+  }
+
+  void CopyToSubColumn(const Graph& graph,
+                       uint32_t nid,
+                       const Column<AttrType>* col,
+                       const Graph& subgraph,
+                       Column<AttrType>* subcol) {
+    const auto& idx = graph.indexed_graph();
+    const auto& subidx = subgraph.indexed_graph();
+    const Node* node = idx[nid].source;
+    // Copy inputs.
+    for (size_t i = 0; i < subidx.input_nodes().size(); ++i) {
+      const uint32_t sub_innid = subidx.input_nodes()[i];
+      subcol->value[subidx.entry_id(sub_innid, 0)] = col->value[idx.entry_id(node->inputs[i])];
+    }
+    // Copy outputs.
+    for (size_t i = 0; i < subgraph.outputs.size(); ++i) {
+      subcol->value[subidx.entry_id(subgraph.outputs[i])] = col->value[idx.entry_id(nid, i)];
+    }
+  }
+
+  void CopyFromSubColumn(const Graph& subgraph,
+                         const Column<AttrType>* subcol,
+                         const Graph& graph,
+                         uint32_t nid,
+                         Column<AttrType>* col) {
+    const auto& idx = graph.indexed_graph();
+    const auto& subidx = subgraph.indexed_graph();
+    const Node* node = idx[nid].source;
+    // Copy inputs.
+    for (size_t i = 0; i < subidx.input_nodes().size(); ++i) {
+      const uint32_t sub_innid = subidx.input_nodes()[i];
+      col->value[idx.entry_id(node->inputs[i])] = subcol->value[subidx.entry_id(sub_innid, 0)];
+    }
+    // Copy outputs.
+    for (size_t i = 0; i < subgraph.outputs.size(); ++i) {
+      col->value[idx.entry_id(nid, i)] = subcol->value[subidx.entry_id(subgraph.outputs[i])];
+    }
   }
 
   void InferGraphNode(const Graph* graph,
@@ -124,8 +189,6 @@ class InferAttrPass {
     const IndexedGraph& idx = graph->indexed_graph();
     const Node* node = idx[nid].source;
     auto sg = node->graph();
-    const uint32_t outent_st = idx.entry_id(nid, 0);
-    const uint32_t outent_ed = outent_st + node->num_outputs();
     if (!TryReuse(idx, nid, attr)) {
       Column<AttrType>* subattr = attr->children[nid].CopyOnWrite();
       // Reset the column.
@@ -133,15 +196,15 @@ class InferAttrPass {
         subattr->value[i] = empty_val_;
       }
       // Copy input/output shapes.
-      for (size_t i = 0; i < node->inputs.size(); ++i) {
-        subattr->value[i] = attr->value[idx.entry_id(node->inputs[i])];
-      }
-      std::copy(attr->value.begin() + outent_st,
-                attr->value.begin() + outent_ed,
-                subattr->value.end() - node->num_outputs());
-      // TODO: handle backward graph.
+      CopyToSubColumn(*graph, nid, attr, *sg, subattr);
       const Column<AttrType>* sub_fwd_attr_col = nullptr;
-      if (sg->global_attrs.count("gradient_entry_mapping")) { // A backward graph node.
+      if (sg->global_attrs.count("gradient_entry_mapping")) {
+        // If this is a backward subgraph node, we need to fetch the attribute of its
+        // forward node (also a subgraph node) for inference. There are two cases:
+        //  - If in top-level, the gradient node has a control dependency that connects
+        //    to the forward node.
+        //  - Otherwise, the forward node is in another subgraph. We need to find the
+        //    node using "gradient_node_mapping".
         if (fwd_attr_col != nullptr) {
           // Foward node is in another graph.
           LOG(FATAL) << "Not implemented.";
@@ -162,14 +225,10 @@ class InferAttrPass {
       }
       LOG(INFO) << ">>>>Infer subgraph node: " << node->attrs.name;
       this->Infer(sg.get(), subattr, sub_fwd_attr_col);
+      
     }
     // Fetch input/output attribute.
-    for (size_t i = 0; i < node->inputs.size(); ++i) {
-      attr->value[idx.entry_id(node->inputs[i])] = attr->children[nid]->value[i];
-    }
-    std::copy(attr->children[nid]->value.end() - node->num_outputs(),
-              attr->children[nid]->value.end(),
-              attr->value.begin() + outent_st);
+    CopyFromSubColumn(*sg, attr->children[nid].get(), *graph, nid, attr);
   }
 
   void InferOpNode(const Graph* graph,
@@ -326,11 +385,9 @@ Graph InferAttrHelper(Graph &&graph,
   using AttrVector = vector<AttrType>;
   const IndexedGraph& idx = graph.indexed_graph();
   // TODO(minjie): short cut for the same shape inputs.
-  if (graph.entry_attrs.count(attr_name) == 0) {
-    ColumnRef<AttrType> ref = graph.CreateEntryColumn<AttrType>(empty_val);
-    graph.entry_attrs.SetColumn(attr_name, ref);
-  }
-  Column<AttrType>* attr_col = graph.entry_attrs.GetColumn<AttrType>(attr_name).CopyOnWrite();
+  // TODO(minjie): reset the column for new inference.
+  Column<AttrType>* attr_col =
+    graph.CreateOrWriteEntryColumn<AttrType>(attr_name, empty_val);
 
   // Get input shapes.
   const AttrVector& shape_args = graph.GetGlobalAttr<AttrVector>(input_name);
