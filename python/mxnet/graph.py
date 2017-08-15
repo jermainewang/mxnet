@@ -51,6 +51,7 @@ class Graph(object):
 
     def freeze(self):
         self._freezed = True
+        self.specialize(graph_frozen=1)
 
     def __del__(self):
         check_call(_LIB.MXGraphFree(self.handle));

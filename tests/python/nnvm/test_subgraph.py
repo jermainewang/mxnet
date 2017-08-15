@@ -215,10 +215,67 @@ def test_infer_shape_subgraph_grad2():
     args = {'shape_inputs' : [[], [256, 32, 100, 100]]}
     net_graph.specialize(mx_infer_shape_args=args)
     print(net_graph.get_node_entry_attr("shape"))
-    
+
+def test_plan_memory_no_subgraph():
+    # Test no grad
+    g = _conv_block()
+    shape_args={'shape_inputs' : [[256, 32, 100, 100]]}
+    dtype_args={'dtype_inputs' : [0]}
+    g.specialize(mx_infer_shape_args=shape_args,
+                 mx_infer_dtype_args=dtype_args,
+                 graph_frozen=1)
+    # Test with grad
+    g_grad = _conv_block_with_grad(full_graph=True)
+    shape_args = {'shape_inputs' : [[], [256, 32, 100, 100]]}
+    dtype_args = {'dtype_inputs' : [-1, 0]}
+    g_grad.specialize(mx_infer_shape_args=shape_args,
+                      mx_infer_dtype_args=dtype_args,
+                      graph_frozen=1)
+
+def test_plan_memory_subgraph():
+    # Specialized subgraph.
+    g = _conv_block()
+    shape_args = {'shape_inputs' : [[256, 32, 100, 100]]}
+    dtype_args = {'dtype_inputs' : [0]}
+    g.specialize(mx_infer_shape_args=shape_args,
+                 mx_infer_dtype_args=dtype_args)
+    ConvBlock = graph.symbolize(g)
+    net = sym.Variable('data')
+    net = ConvBlock(data=net, name='conv1')
+    net = ConvBlock(data=net, name='conv2')
+    net_graph = graph.create(net)
+    net_graph.specialize(mx_infer_shape_args=shape_args,
+                         mx_infer_dtype_args=dtype_args,
+                         graph_frozen=1)
+
+def test_plan_memory_subgraph_grad():
+    g = _conv_block_with_grad()
+    shape_args = {'shape_inputs' : [[256, 32, 100, 100]]}
+    dtype_args = {'dtype_inputs' : [0]}
+    g.specialize(mx_infer_shape_args=shape_args,
+                 mx_infer_dtype_args=dtype_args)
+
+    ConvBlock = graph.symbolize(g)
+    net = sym.Variable('data')
+    net = ConvBlock(data=net, name='conv1')
+    net = ConvBlock(data=net, name='conv2')
+    net_graph = graph.create(net)
+    xs_blacklist = [{'node': 0},  # data
+                    {'node': 5},  # conv1_bn_moving_mean
+                    {'node': 6},  # conv1_bn_moving_var
+                    {'node': 12}, # conv2_bn_moving_mean
+                    {'node': 13}] # conv2_bn_moving_var
+    args = {'xs_blacklist' : xs_blacklist}
+    net_graph = net_graph.transform(["MXGradientFull"], mx_gradient_args=args)
+    shape_args = {'shape_inputs' : [[], [256, 32, 100, 100]]}
+    dtype_args = {'dtype_inputs' : [-1, 0]}
+    net_graph.specialize(mx_infer_shape_args=shape_args,
+                         mx_infer_dtype_args=dtype_args,
+                         graph_frozen=1)
+
 if __name__ == '__main__':
-    test_conv_compose_no_share()
-    test_conv_compose_share()
+    #test_conv_compose_no_share()
+    #test_conv_compose_share()
     #test_specialize_dot()
     #test_specialize_json()
     #test_specialize_coloring()
@@ -229,4 +286,7 @@ if __name__ == '__main__':
     #test_infer_shape_subgraph1()
     #test_infer_shape_subgraph2()
     #test_infer_shape_subgraph_grad1()
-    test_infer_shape_subgraph_grad2()
+    #test_infer_shape_subgraph_grad2()
+    #test_plan_memory_no_subgraph()
+    #test_plan_memory_subgraph()
+    test_plan_memory_subgraph_grad()

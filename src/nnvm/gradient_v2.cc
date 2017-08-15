@@ -15,6 +15,7 @@ using namespace nnvm;
 using namespace std;
 
 namespace mxnet {
+namespace pass {
 namespace {
 
 nnvm::NodeEntry AggregateGradient(std::vector<nnvm::NodeEntry>&& v) {
@@ -767,4 +768,5 @@ NNVM_REGISTER_PASS(MXGradientFull)
 .depend_global_attr("mx_gradient_args")
 ;
 
+}  // namespace pass
 }  // namespace mxnet

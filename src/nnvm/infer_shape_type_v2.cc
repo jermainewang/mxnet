@@ -11,8 +11,7 @@ using namespace std;
 using namespace nnvm;
 
 namespace mxnet {
-namespace {
-
+namespace pass {
 /* Pseudo-code
  *
  * void InferShapePass(Graph graph, vector<TShape> hints) {  // hints also include input shapes
@@ -206,7 +205,7 @@ class InferAttrPass {
         //  - Otherwise, the forward node is in another subgraph. We need to find the
         //    node using "gradient_node_mapping".
         if (fwd_attr_col != nullptr) {
-          // Foward node is in another graph.
+          // TODO(minjie): Foward node is in another graph.
           LOG(FATAL) << "Not implemented.";
           const auto& node_mapping =
             graph->GetGlobalAttr<vector<uint32_t>>("gradient_node_mapping");
@@ -428,6 +427,7 @@ Graph InferAttrHelper(Graph &&graph,
   return graph;
 }
 
+//////////////////////////// Infer shape pass /////////////////////////////
 Graph MXInferShape(Graph &&graph) {
   static const TShape empty_val = TShape();
   static const string infer_name = "FInferShape";
@@ -495,10 +495,71 @@ NNVM_REGISTER_PASS(MXInferShapeAPI)
 
 DMLC_JSON_ENABLE_ANY(ColumnRef<TShape>, column_shape);
 
-DMLC_JSON_ENABLE_ANY(ShapeVector, list_shape);
-DMLC_JSON_ENABLE_ANY(DTypeVector, list_int);
-DMLC_JSON_ENABLE_ANY(size_t, size_t);
+//////////////////////////// Infer type pass /////////////////////////////
+Graph MXInferType(Graph &&graph) {
+  static const int empty_val = -1;
+  static const string infer_name = "FInferType";
+  static const string input_name = "dtype_inputs";
+  static const string attr_key_name = "dtype_attr_key";
+  static const string attr_name = "dtype";
+  return InferAttrHelper<int>(std::move(graph),
+                              empty_val,
+                              infer_name,
+                              input_name,
+                              attr_key_name,
+                              attr_name);
+}
+NNVM_REGISTER_PASS(MXInferType)
+.describe("Infer the type of each node entries.")
+.set_body(MXInferType)
+.set_change_graph(false)
+.depend_graph_attr("dtype_inputs")
+.provide_entry_attr("dtype");
 
+struct MXInferTypeArgs {
+  vector<int> dtype_inputs;
+  void Load(dmlc::JSONReader *reader) {
+    dmlc::JSONObjectReadHelper helper;
+    vector<int> raw_dtypes;
+    helper.DeclareOptionalField("dtype_inputs", &raw_dtypes);
+    helper.ReadAllFields(reader);
+    for (const auto& rt : raw_dtypes) {
+      dtype_inputs.emplace_back(rt);
+    }
+  }
+};
 
-}  // namespace
+Graph MXInferTypeAPI(Graph &&graph) {
+  static const int empty_val = -1;
+  static const string infer_name = "FInferType";
+  static const string input_name = "dtype_inputs";
+  static const string attr_key_name = "dtype_attr_key";
+  static const string attr_name = "dtype";
+  const string& json_args = graph.GetGlobalAttr<string>("mx_infer_dtype_args");
+  MXInferTypeArgs args;
+  istringstream is(json_args);
+  dmlc::JSONReader reader(&is);
+  reader.Read(&args);
+  const auto& idx = graph.indexed_graph();
+  CHECK_LE(args.dtype_inputs.size(), idx.input_nodes().size())
+    << "Pass argument error: more input dtypes are provided than required.";
+  args.dtype_inputs.resize(idx.input_nodes().size());
+  graph.global_attrs[input_name] = std::make_shared<any>(std::move(args.dtype_inputs));
+  auto&& ret = InferAttrHelper<int>(std::move(graph),
+                                    empty_val,
+                                    infer_name,
+                                    input_name,
+                                    attr_key_name,
+                                    attr_name);
+  ret.global_attrs.erase(input_name);
+  return ret;
+}
+NNVM_REGISTER_PASS(MXInferTypeAPI)
+.describe("Infer the data type of each node entries.")
+.set_body(MXInferTypeAPI)
+.set_change_graph(false)
+.depend_graph_attr("mx_infer_dtype_args")
+.provide_entry_attr("dtype");
+
+}  // namespace pass
 }  // namespace mxnet
