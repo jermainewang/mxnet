@@ -3,9 +3,7 @@
  * \file compute_ignored_inputs.cc
  * \brief Compute which inputs are ignored for each node in the graph.
  */
-#include <nnvm/graph.h>
-#include <nnvm/pass.h>
-#include <nnvm/op_attr_types.h>
+#include "./mx_passes.h"
 
 using namespace std;
 using namespace nnvm;

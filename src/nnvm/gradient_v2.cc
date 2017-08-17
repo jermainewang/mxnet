@@ -4,12 +4,12 @@
  * \brief Passes that takes gradient of the graph
  * This code was modified based on mxnet codebase by Min Lin.
  */
-#include <nnvm/pass.h>
-#include <nnvm/op_attr_types.h>
 #include <algorithm>
 #include <functional>
 #include <unordered_set>
 #include <queue>
+
+#include "./mx_passes.h"
 
 using namespace nnvm;
 using namespace std;
@@ -261,42 +261,6 @@ void SplitForwardBackward(
   }
 }
 
-struct GradNodeInInfo {
-  enum Type {
-    kFromGradOut = 0,
-    kFromFwdOut,
-    kFromFwdIn,
-  };
-  // Whether the input should be fetched from out_grads. If false, the input entry
-  // should be fetched from forward outputs.
-  int type = -1;
-  // The index of the entry to fetch from. If `from_out_grads` is true, the input
-  // should be fetched from out_grads[index]; otherwise, it should be fetched from
-  // forward_outputs[index].
-  size_t index = 0;
-  
-  inline static GradNodeInInfo CreateFromOutGrads(size_t idx) {
-    GradNodeInInfo ret;
-    ret.type = kFromGradOut;
-    ret.index = idx;
-    return ret;
-  }
-
-  inline static GradNodeInInfo CreateFromForwardOut(size_t idx) {
-    GradNodeInInfo ret;
-    ret.type = kFromFwdOut;
-    ret.index = idx;
-    return ret;
-  }
-
-  inline static GradNodeInInfo CreateFromForwardIn(size_t idx) {
-    GradNodeInInfo ret;
-    ret.type = kFromFwdIn;
-    ret.index = idx;
-    return ret;
-  }
-};
-
 struct GradNodeOutInfo {
   enum Type {
     kFromZero = 0,
@@ -321,52 +285,17 @@ struct GradNodeOutInfo {
 
 }  // namespace
 
-struct MXEntryArg {
-  uint32_t node = 0;
-  uint32_t index = 0;
-  uint32_t version = 0;
-  void Load(dmlc::JSONReader *reader) {
-    dmlc::JSONObjectReadHelper helper;
-    helper.DeclareField("node", &node);
-    helper.DeclareOptionalField("index", &index);
-    helper.DeclareOptionalField("version", &version);
-    helper.ReadAllFields(reader);
-  }
+namespace grad {
+enum GradMode {
+  kFullGraph = 0,
+  kOnlyForward,
+  kOnlyBackward,
 };
+}  // namespace
 
-struct MXGradientArgs {
-  // The targets to be differentiated. If none is given,
-  // all the input entries will be included.
-  // Note: Only one of "xs" and "xs_blacklist" should be provided.
-  // If none is provided, blacklist rule is applied.
-  vector<MXEntryArg> xs;
-  // Alternative way to specify the gradable targets. The list
-  // specifies which input entries do NOT need to be differentiated.
-  // Note: Only one of "xs" and "xs_blacklist" should be provided.
-  // If none is provided, blacklist rule is applied.
-  vector<MXEntryArg> xs_blacklist;
-
-  // The objective entries to compute gradients from. If none is
-  // given, all the output entries will be included.
-  // Note: Only one of "ys" and "ys_blacklist" should be provided.
-  // If none is provided, blacklist rule is applied.
-  vector<MXEntryArg> ys;
-  // Alternative way to specify the objective entries. The list
-  // specifies which objective entries are NOT included in gradient
-  // computation.
-  // Note: Only one of "ys" and "ys_blacklist" should be provided.
-  // If none is provided, blacklist rule is applied.
-  vector<MXEntryArg> ys_blacklist;
-
-  void Load(dmlc::JSONReader *reader) {
-    dmlc::JSONObjectReadHelper helper;
-    helper.DeclareOptionalField("xs", &xs);
-    helper.DeclareOptionalField("xs_blacklist", &xs_blacklist);
-    helper.DeclareOptionalField("ys", &ys);
-    helper.DeclareOptionalField("ys_blacklist", &ys_blacklist);
-    helper.ReadAllFields(reader);
-  }
-};
+using grad::MXEntryArg;
+using grad::MXGradientArgs;
+using grad::GradNodeInInfo;
 
 inline MXGradientArgs LoadArgs(const string& json_str) {
   MXGradientArgs ret;
@@ -437,7 +366,7 @@ const vector<IndexedGraph::NodeEntry> ExtractYS(
 
 Graph GradientRec(const Graph& fwd_graph,
                   const MXGradientArgs& args,
-                  bool full_graph) {
+                  grad::GradMode mode) {
   using nnvm::FGradient;
   static auto& op_fgrad_map = Op::GetAttr<FGradient>("FGradient");
 
@@ -527,7 +456,7 @@ Graph GradientRec(const Graph& fwd_graph,
     if (legacy_bwd_node) {
       legacy_bwd2fwd[legacy_bwd_node] = node.get();
     }
-    if (!full_graph) {
+    if (mode != grad::kFullGraph) {
       SplitForwardBackward(in_grads, fwd_graph_idx, &fwdent2bwdent);
     }
     // Save input gradients.
@@ -548,7 +477,7 @@ Graph GradientRec(const Graph& fwd_graph,
   }
   const auto& grad_g_idx = grad_g->indexed_graph();
 
-  if (full_graph) {
+  if (mode == grad::kFullGraph) {
     return *grad_g;
   }
 
@@ -590,45 +519,7 @@ Graph GradientRec(const Graph& fwd_graph,
   }
   const auto& new_fwd_graph_idx = new_fwd_graph.indexed_graph();
 
-  // Create mapping between entries that have gradient relations. The mapping
-  // is stored as a vector from backward entry id to forward entry id. 
-  {
-    // TODO(minjie): refactor into a function.
-    const uint32_t default_val = new_fwd_graph_idx.num_node_entries();
-    vector<uint32_t> mapping(grad_g_idx.num_node_entries(), default_val);
-    for (uint32_t nid = 0; nid < new_fwd_graph_idx.num_nodes(); ++nid) {
-      const Node* fwd_node = new_fwd_graph_idx[nid].source;
-      for (size_t i = 0; i < node2outgrads[fwd_node].size(); ++i) {
-        const NodeEntry& ent = node2outgrads[fwd_node][i].GetSum();
-        const Node* bwd_node = ent.node.get();
-        if (!grad_g_idx.exist(bwd_node)) {
-          continue;
-        }
-        const uint32_t bwdeid = grad_g_idx.entry_id(ent);
-        const uint32_t fwdeid = new_fwd_graph_idx.entry_id(nid, i);
-        mapping[bwdeid] = fwdeid;
-      }
-    }
-    grad_g->global_attrs["gradient_entry_mapping"] =
-      std::make_shared<any>(std::move(mapping));
-  }
-
-  // Create mapping between entries that have feeding relations. The mapping
-  // is stored as a vector from backward entry id to forward entry id.
-  {
-    // TODO(minjie): refactor into a function.
-    const uint32_t default_val = new_fwd_graph_idx.num_node_entries();
-    vector<uint32_t> mapping(grad_g_idx.num_node_entries(), default_val);
-    for (const auto& kv : fwdent2bwdent) {
-      const uint32_t fwdeid = new_fwd_graph_idx.entry_id(kv.first);
-      const uint32_t bwdeid = grad_g_idx.entry_id(kv.second);
-      mapping[bwdeid] = fwdeid;
-    }
-    grad_g->global_attrs["feed_entry_mapping"] =
-      std::make_shared<any>(std::move(mapping));
-  }
-
-  // Understand how the input entries of the gradient graph come from.
+  // Compute how the input entries of the gradient graph come from.
   vector<GradNodeInInfo> inent_info;
   // 1. Come from the inputs of the forward graph.
   const vector<uint32_t>& new_fwd_in_nodes = new_fwd_graph_idx.input_nodes();
@@ -655,7 +546,7 @@ Graph GradientRec(const Graph& fwd_graph,
     inent_info.push_back(std::move(inent_map[grad_in_node]));
   }
 
-  // Understand how the output entries of the gradient graph come from.
+  // Compute how the output entries of the gradient graph come from.
   vector<GradNodeOutInfo> outent_info;
   unordered_map<uint32_t, size_t> bwdoutnid2index;
   for (size_t i = 0; i < xs.size(); ++i) {
@@ -668,6 +559,65 @@ Graph GradientRec(const Graph& fwd_graph,
     } else {
       outent_info.emplace_back(GradNodeOutInfo::CreateFromZero());
     }
+  }
+
+  // Attributes that are stored in the gradient graph.
+  // 1. Create mapping between entries that have gradient relations. The mapping
+  // is stored as a vector from backward entry id to forward entry id. 
+  {
+    // TODO(minjie): refactor into a function.
+    const uint32_t default_val = new_fwd_graph_idx.num_node_entries();
+    vector<uint32_t> mapping(grad_g_idx.num_node_entries(), default_val);
+    for (uint32_t nid = 0; nid < new_fwd_graph_idx.num_nodes(); ++nid) {
+      const Node* fwd_node = new_fwd_graph_idx[nid].source;
+      for (size_t i = 0; i < node2outgrads[fwd_node].size(); ++i) {
+        const NodeEntry& ent = node2outgrads[fwd_node][i].GetSum();
+        const Node* bwd_node = ent.node.get();
+        if (!grad_g_idx.exist(bwd_node)) {
+          continue;
+        }
+        const uint32_t bwdeid = grad_g_idx.entry_id(ent);
+        const uint32_t fwdeid = new_fwd_graph_idx.entry_id(nid, i);
+        mapping[bwdeid] = fwdeid;
+      }
+    }
+    grad_g->global_attrs["gradient_entry_mapping"] =
+      std::make_shared<any>(std::move(mapping));
+  }
+
+  // 2. Create mapping between entries that have feeding relations. The mapping
+  // is stored as a vector from backward entry id to forward entry id.
+  {
+    // TODO(minjie): refactor into a function.
+    const uint32_t default_val = new_fwd_graph_idx.num_node_entries();
+    vector<uint32_t> mapping(grad_g_idx.num_node_entries(), default_val);
+    for (const auto& kv : fwdent2bwdent) {
+      const uint32_t fwdeid = new_fwd_graph_idx.entry_id(kv.first);
+      const uint32_t bwdeid = grad_g_idx.entry_id(kv.second);
+      mapping[bwdeid] = fwdeid;
+    }
+    grad_g->global_attrs["feed_entry_mapping"] =
+      std::make_shared<any>(std::move(mapping));
+  }
+
+  // 3. Create mapping between legacy backward nodes that have control dependencies
+  // to forward nodes. The mapping is stored as a vector from backward node id
+  // to forward node id.
+  {
+    // TODO(minjie): refactor into a function.
+    const uint32_t default_val = new_fwd_graph_idx.num_nodes();
+    vector<uint32_t> mapping(grad_g_idx.num_nodes(), default_val);
+    for (const auto& kv : legacy_bwd2fwd) {
+      const uint32_t bwdnid = grad_g_idx.node_id(kv.first);
+      const uint32_t fwdnid = new_fwd_graph_idx.node_id(kv.second);
+      mapping[bwdnid] = fwdnid;
+    }
+    grad_g->global_attrs["gradient_node_mapping"] =
+      std::make_shared<any>(std::move(mapping));
+  }
+
+  if (mode == grad::kOnlyBackward) {
+    return *grad_g;
   }
 
   // Register FGradient for the graph. Note that all local variables must be passed by value.
@@ -722,8 +672,6 @@ Graph GradientRec(const Graph& fwd_graph,
   return new_fwd_graph;
 }
 
-
-
 vector<IndexedGraph::NodeEntry> ExtractEntries(
     const Graph& graph, const vector<MXEntryArg>& entry_args) {
   // Convert to IndexGraph::NodeEntry.
@@ -742,17 +690,22 @@ vector<IndexedGraph::NodeEntry> ExtractEntries(
 
 Graph MXGradient(const Graph& graph) {
   const MXGradientArgs& args = LoadArgs(graph.GetGlobalAttr<string>("mx_gradient_args"));
-  return GradientRec(graph, args, false);
+  return GradientRec(graph, args, grad::kOnlyForward);
 }
 
 Graph MXGradientFull(const Graph& graph) {
   const MXGradientArgs& args = LoadArgs(graph.GetGlobalAttr<string>("mx_gradient_args"));
-  return GradientRec(graph, args, true);
+  return GradientRec(graph, args, grad::kFullGraph);
+}
+
+Graph MXGradientOnlyBackward(const Graph& graph) {
+  const MXGradientArgs& args = LoadArgs(graph.GetGlobalAttr<string>("mx_gradient_args"));
+  return GradientRec(graph, args, grad::kOnlyBackward);
 }
 
 // register pass
 NNVM_REGISTER_PASS(MXGradient)
-.describe("Generate the gradient graph of src.attrs[\"ys\"] wrt src.attrs[\"xs\"].")
+.describe("Transform the graph so that it is gradable.")
 .set_body(MXGradient)
 .set_change_graph(true)
 .depend_global_attr("mx_gradient_args")
@@ -762,10 +715,20 @@ NNVM_REGISTER_PASS(MXGradient)
 ;
 
 NNVM_REGISTER_PASS(MXGradientFull)
-.describe("Return a full graph that outputs of src.attrs[\"ys\"] wrt src.attrs[\"xs\"]")
+.describe("Transform the graph to compute both forward and backward.")
 .set_body(MXGradientFull)
 .set_change_graph(true)
 .depend_global_attr("mx_gradient_args")
+;
+
+NNVM_REGISTER_PASS(MXGradientOnlyBackward)
+.describe("Transform the graph to compute only the backward.")
+.set_body(MXGradientOnlyBackward)
+.set_change_graph(true)
+.depend_global_attr("mx_gradient_args")
+.provide_global_attr("gradient_entry_mapping")
+.provide_global_attr("gradient_node_mapping")
+.provide_global_attr("feed_entry_mapping")
 ;
 
 }  // namespace pass

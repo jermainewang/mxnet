@@ -3,11 +3,8 @@
  * \file plan_memory.cc
  * \brief Assign memory tag to each of the data entries.
  */
-#include <nnvm/graph.h>
-#include <nnvm/pass.h>
-#include <nnvm/graph_attr_types.h>
-#include <nnvm/op_attr_types.h>
 #include <memory>
+
 #include "./mx_passes.h"
 
 using namespace std;

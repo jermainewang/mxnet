@@ -3,9 +3,6 @@
  * \file compute_inplace.cc
  * \brief Compute the inplace option for each node in the graph.
  */
-#include <nnvm/graph.h>
-#include <nnvm/pass.h>
-#include <nnvm/op_attr_types.h>
 #include "./mx_passes.h"
 
 using namespace std;

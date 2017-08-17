@@ -3,6 +3,10 @@ import mxnet as mx
 import mxnet.graph as graph
 import mxnet.symbol as sym
 
+kOnlyForward = 0
+kOnlyBackward = 1
+kFullGraph = 2
+
 def _Viz(dot_str, fname='tmp.dot'):
     print(dot_str)
     with open(fname, 'w') as f:
@@ -18,17 +22,19 @@ def _conv_block():
     g = graph.create(net)
     return g
 
-def _conv_block_with_grad(full_graph=False):
+def _conv_block_with_grad(mode=kOnlyForward):
     g = _conv_block()
     # Compute gradients for all inputs using all outputs.
     # The gradient graph is also generated separately.
     xs_blacklist = [{'node': 6},  # bn_moving_mean
                     {'node': 7}]  # bn_moving_var
     args = {'xs_blacklist' : xs_blacklist}
-    if full_graph:
+    if mode == kFullGraph:
         g = g.transform(["MXGradientFull"], mx_gradient_args=args)
-    else:
+    elif mode == kOnlyForward:
         g = g.transform(["MXGradient"], mx_gradient_args=args)
+    else:
+        g = g.transform(["MXGradientOnlyBackward"], mx_gradient_args=args)
     return g
 
 def _conv_net():
@@ -38,7 +44,7 @@ def _conv_net():
     net = ConvBlock(data=net, name='conv2')
     return graph.create(net)
 
-def _conv_net_with_grad(full_graph=False):
+def _conv_net_with_grad(mode=kOnlyForward):
     ConvBlock = graph.symbolize(_conv_block_with_grad())
     net = sym.Variable('data')
     net = ConvBlock(data=net, name='conv1')
@@ -50,10 +56,12 @@ def _conv_net_with_grad(full_graph=False):
                     {'node': 12}, # conv2_bn_moving_mean
                     {'node': 13}] # conv2_bn_moving_var
     args = {'xs_blacklist' : xs_blacklist}
-    if full_graph:
+    if mode == kFullGraph:
         net_graph = net_graph.transform(["MXGradientFull"], mx_gradient_args=args)
-    else:
+    elif mode == kOnlyForward:
         net_graph = net_graph.transform(["MXGradient"], mx_gradient_args=args)
+    else:
+        net_graph = net_graph.transform(["MXGradientOnlyBackward"], mx_gradient_args=args)
     return net_graph
 
 def test_conv_compose_no_share():
@@ -132,17 +140,24 @@ def test_specialize_coloring():
 
 
 def test_transform_grad_no_subgraph():
-    g = _conv_block_with_grad(full_graph=True)
-    g.specialize(save_dot=True, save_json=True)
+    g = _conv_block_with_grad(mode=kFullGraph)
+    g.specialize(save_dot=True)
     _Viz(g.get_global_attr("dot")[1], 'blk_grad.dot')
     #print(g.get_global_attr("json")[1])
 
 def test_transform_grad_subgraph():
-    net_graph = _conv_net_with_grad(full_graph=True)
-    net_graph.specialize(save_dot=True, save_json=True)
+    net_graph = _conv_net_with_grad(mode=kFullGraph)
+    net_graph.specialize(save_dot=True)
     _Viz(net_graph.get_global_attr("dot")[1], 'net_grad.dot')
     #print(net_graph.get_global_attr("json")[1])
 
+def test_transform_grad_only_backward():
+    g = _conv_block_with_grad(mode=kOnlyBackward)
+    g.specialize(save_dot=True)
+    _Viz(g.get_global_attr("dot")[1], 'blk_only_grad.dot')
+    net_graph = _conv_net_with_grad(mode=kOnlyBackward)
+    net_graph.specialize(save_dot=True)
+    _Viz(net_graph.get_global_attr("dot")[1], 'net_only_grad.dot')
 
 def test_high_order_grad():
     x = sym.Variable('x')
@@ -163,7 +178,7 @@ def test_infer_shape_no_subgraph():
     g.specialize(mx_infer_shape_args=args)
     print(g.get_node_entry_attr("shape"))
     # Test with grad
-    g_grad = _conv_block_with_grad(full_graph=True)
+    g_grad = _conv_block_with_grad(mode=kFullGraph)
     args = {'shape_inputs' : [[], [256, 32, 100, 100]]}
     g_grad.specialize(save_dot=True)
     _Viz(g_grad.get_global_attr("dot")[1])
@@ -191,7 +206,7 @@ def test_infer_shape_subgraph2():
     print(net_graph.get_node_entry_attr("shape"))
 
 def test_infer_shape_subgraph_grad1():
-    g = _conv_net_with_grad(full_graph=True)
+    g = _conv_net_with_grad(mode=kFullGraph)
     args = {'shape_inputs' : [[], [256, 32, 100, 100]]}
     g.specialize(mx_infer_shape_args=args)
     print(g.get_node_entry_attr("shape"))
@@ -216,6 +231,17 @@ def test_infer_shape_subgraph_grad2():
     net_graph.specialize(mx_infer_shape_args=args)
     print(net_graph.get_node_entry_attr("shape"))
 
+def test_infer_shape_only_backward():
+    g = _conv_block_with_grad()
+    args = {'shape_inputs' : [[256, 32, 100, 100]]}
+    g.specialize(mx_infer_shape_args=args)
+    fwd_shapes = g.get_node_entry_attr("shape")[1]
+    g_grad = _conv_block_with_grad(mode=kOnlyBackward)
+    args = {'shape_inputs' : [[], [256, 32, 100, 100]],
+            'forward_shapes' : fwd_shapes}
+    g_grad.specialize(mx_infer_shape_args=args)
+    print(g_grad.get_node_entry_attr("shape"))
+
 def test_plan_memory_no_subgraph():
     # Test no grad
     g = _conv_block()
@@ -225,7 +251,7 @@ def test_plan_memory_no_subgraph():
                  mx_infer_dtype_args=dtype_args,
                  graph_frozen=1)
     # Test with grad
-    g_grad = _conv_block_with_grad(full_graph=True)
+    g_grad = _conv_block_with_grad(mode=kFullGraph)
     shape_args = {'shape_inputs' : [[], [256, 32, 100, 100]]}
     dtype_args = {'dtype_inputs' : [-1, 0]}
     g_grad.specialize(mx_infer_shape_args=shape_args,
@@ -281,12 +307,14 @@ if __name__ == '__main__':
     #test_specialize_coloring()
     #test_transform_grad_no_subgraph()
     #test_transform_grad_subgraph()
+    #test_transform_grad_only_backward()
     #test_high_order_grad()
     #test_infer_shape_no_subgraph()
     #test_infer_shape_subgraph1()
     #test_infer_shape_subgraph2()
     #test_infer_shape_subgraph_grad1()
     #test_infer_shape_subgraph_grad2()
+    #test_infer_shape_only_backward()
     #test_plan_memory_no_subgraph()
     #test_plan_memory_subgraph()
-    test_plan_memory_subgraph_grad()
+    #test_plan_memory_subgraph_grad()
