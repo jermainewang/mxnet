@@ -161,7 +161,15 @@ static const std::string key = "mutate_index";
 }  // namespace mutate
 
 namespace plan_memory {
-static const std::string key = "storage";
+static const std::string ref_key = "storage_ref";
+static const std::string storage_key = "storage";
+// Special storage id when storage cannot be assigned due to many reasons
+// (e.g. the shape or dtype is unknown).
+static const int kBadStorageID = -1;
+// Special storage id for external space.
+static const int kExternalStorageID = -2;
+// Special storage id for space that is not allocated.
+static const int kNull = -3;
 struct StorageRef {
   int storage_id;
   int inplace_index;

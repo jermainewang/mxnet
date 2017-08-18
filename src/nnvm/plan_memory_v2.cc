@@ -111,19 +111,15 @@ inline uint32_t ColorNodeGroup(
 }
 }  // namespace
 
+using plan_memory::StorageRef;
+using plan_memory::Storage;
+using inplace::InplaceOption;
+
 // simple graph based allocator.
 class GraphAllocator {
  public:
   // storage id equals integer.
   using StorageID = int;
-
-  // Bad storage id
-  // XXX(minjie): The name "bad" here is actually not accurate. It just means
-  // no logical storage id can be assigned before runtime. For example, if
-  // the tensor has dynamic shape or if the tensor is sparse and so on.
-  static const StorageID kBadStorageID = -1;
-  // external storage id
-  static const StorageID kExternalStorageID = -2;
 
   StorageID Request(int dev_id, int dtype, TShape shape,
                     uint32_t node_id, uint32_t refcount) {
@@ -135,12 +131,14 @@ class GraphAllocator {
   // request a free storage
   StorageID RequestColor(int dev_id, int dtype, TShape shape,
                          uint32_t color, uint32_t refcount) {
-    if (shape.ndim() == 0 || refcount == 0) {
-      return kBadStorageID;
+    if (shape.ndim() == 0) {
+      return plan_memory::kBadStorageID;
+    }
+    if (refcount == 0) {
+      return plan_memory::kNull;
     }
     // search memory block in [size / match_range_, size * match_range_)
-    // TODO(tqchen) add size of the dtype, assume 4 bytes for now
-    size_t size = shape.Size() * 4;
+    size_t size = shape.Size() * mshadow::mshadow_sizeof(dtype);
     if (match_range_ == 0) {
       // Always allocate new space if no match range is set.
       return this->Alloc(dev_id, size, refcount);
@@ -198,8 +196,9 @@ class GraphAllocator {
   }
   // release a memory space.
   void Release(StorageID id, uint32_t node_id) {
-    CHECK_NE(id, kBadStorageID);
-    if (id == kExternalStorageID) {
+    CHECK_NE(id, plan_memory::kBadStorageID);
+    CHECK_NE(id, plan_memory::kNull);
+    if (id == plan_memory::kExternalStorageID) {
       // Nothing to be done for external storage.
       return;
     }
@@ -232,6 +231,15 @@ class GraphAllocator {
       total += p->max_bytes;
     }
     return total;
+  }
+
+  vector<plan_memory::Storage> GetAllStorage() const {
+    using plan_memory::Storage;
+    vector<Storage> ret(data_.size());
+    for (const auto& d : data_) {
+      ret.emplace_back(Storage{d->id, d->device_id, d->max_bytes});
+    }
+    return ret;
   }
 
   // Constructor. No graph coloring is used by default.
@@ -300,8 +308,6 @@ class GraphAllocator {
   const IndexedGraph* idx_;
 };
 
-using plan_memory::StorageRef;
-using inplace::InplaceOption;
 
 void InplaceOptimize(const Graph& graph,
                      uint32_t nid,
@@ -324,7 +330,7 @@ void InplaceOptimize(const Graph& graph,
     const auto sid_out = storage->value[eid_out].storage_id;
     const auto sid_in = storage->value[eid_in].storage_id;
     if (taken[kv.first] == false &&
-        sid_out == GraphAllocator::kBadStorageID &&
+        sid_out == plan_memory::kNull &&
         sid_in >= 0 &&
         (allocator->GetRefCount(sid_in) == 1 || opt.is_identity) &&
         entry_ref_counts[eid_out] > 0 &&
@@ -359,7 +365,7 @@ void NormalAlloc(const Graph& graph,
   std::multimap<size_t, uint32_t> eids;
   for (uint32_t index = 0; index < node->num_outputs(); ++index) {
     uint32_t eid = idx.entry_id(nid, index);
-    if (storage->value[eid].storage_id == GraphAllocator::kBadStorageID) {
+    if (storage->value[eid].storage_id == plan_memory::kNull) {
       const TShape &eshape = shape->value[eid];
       const size_t esize = eshape.Size();
       eids.insert(std::make_pair(esize, eid));
@@ -399,7 +405,8 @@ void FreeInputs(const Graph& graph,
   }
 }
 
-// Check if there are outputs that can be freeded immediately
+// TODO(minjie): change name
+// Check if there are outputs that can be freed immediately
 // these output are not referenced by any operator.
 size_t FreeOutputs(const Graph& graph,
                    uint32_t nid,
@@ -411,7 +418,7 @@ size_t FreeOutputs(const Graph& graph,
   for (uint32_t index = 0; index < node->num_outputs(); ++index) {
     const uint32_t eid = idx.entry_id(nid, index);
     const auto sid = storage->value[eid].storage_id;
-    if (sid == GraphAllocator::kBadStorageID) {
+    if (sid == plan_memory::kBadStorageID) {
       ++num_not_allocated;
     }
   }
@@ -541,7 +548,7 @@ size_t PlanMemoryRec(const Graph& graph,
       vector<uint32_t> sub_in_refcounts(subidx.input_nodes().size(), 0);
       vector<uint32_t> sub_out_refcounts(subidx.outputs().size(), 0);
       ColumnRef<StorageRef> subplan_ref
-        = sg->CreateEntryColumn<StorageRef>({GraphAllocator::kBadStorageID, -1});
+        = sg->CreateEntryColumn<StorageRef>({plan_memory::kNull, -1});
       Column<StorageRef>* subplan = subplan_ref.CopyOnWrite();
       for (size_t i = 0; i < node->inputs.size(); ++i) {
         const uint32_t ineid = idx.entry_id(node->inputs[i]);
@@ -624,13 +631,14 @@ Graph MXPlanMemory(Graph&& graph) {
   const auto& idx = graph.indexed_graph();
   size_t min_allocated_bytes = -1;
   ColumnRef<StorageRef> min_storage_ref;
+  vector<Storage> min_storages;
   const size_t max_match_range = dmlc::GetEnv("NNVM_EXEC_MATCH_RANGE", 16);
   const size_t min_match_range =
          dmlc::GetEnv("NNVM_AUTO_SEARCH_MATCH_RANGE", false) ? 1 : max_match_range;
   for (size_t match_range = min_match_range; match_range <= max_match_range; match_range *= 2) {
     // Make a copy of related fields
     ColumnRef<StorageRef> storage_ref =
-      graph.CreateEntryColumn<StorageRef>({GraphAllocator::kBadStorageID, -1});
+      graph.CreateEntryColumn<StorageRef>({plan_memory::kNull, -1});
 
     // the allocator
     GraphAllocator allocator(&idx, match_range);
@@ -644,15 +652,12 @@ Graph MXPlanMemory(Graph&& graph) {
     if (min_allocated_bytes > storage_allocated_bytes) {
       min_storage_ref = storage_ref;
       min_allocated_bytes = storage_allocated_bytes;
-      //ret.attrs["storage_id"] = std::make_shared<any>(std::move(storage_vec));
-      //ret.attrs["storage_inplace_index"] = std::make_shared<any>(std::move(storage_inplace_index));
-      //ret.attrs["storage_allocated_bytes"] = std::make_shared<any>(storage_allocated_bytes);
-      //ret.attrs["storage_num_not_allocated"] = std::make_shared<any>(storage_num_not_allocated);
-      //min_allocated_bytes = storage_allocated_bytes;
+      min_storages = allocator.GetAllStorage();
     }
   }
-  graph.entry_attrs.SetColumn(plan_memory::key, min_storage_ref);
-
+  graph.entry_attrs.SetColumn(plan_memory::ref_key, min_storage_ref);
+  graph.global_attrs[plan_memory::storage_key] =
+    std::make_shared<any>(std::move(min_storages));
   return graph;
 }
 
@@ -664,7 +669,9 @@ NNVM_REGISTER_PASS(MXPlanMemory)
 .depend_entry_attr("shape")
 .depend_node_attr(inplace::key)
 .depend_node_attr("ignored_inputs")
-.provide_entry_attr(plan_memory::key);
+.provide_entry_attr(plan_memory::ref_key)
+.provide_global_attr(plan_memory::storage_key)
+;
 
 }  // namespace pass
 }  // namespace mxnet
