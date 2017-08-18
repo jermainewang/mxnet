@@ -196,7 +196,8 @@ const Node* FindLegacyBackwardNode(const vector<NodeEntry>& in_grads) {
       return nullptr;
     }
   }
-  if (is_backward.get(bwd_node->op(), false) && bwd_node->control_deps.size()) {
+  if (bwd_node->is_graph() ||
+      (is_backward.get(bwd_node->op(), false) && bwd_node->control_deps.size())) {
     return bwd_node;
   } else {
     return nullptr;

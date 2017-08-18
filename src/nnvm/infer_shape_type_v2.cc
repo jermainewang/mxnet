@@ -195,18 +195,18 @@ class InferAttrPass {
       // Copy input/output shapes.
       CopyToSubColumn(*graph, nid, attr, *sg, subattr);
       const Column<AttrType>* sub_fwd_attr_col = nullptr;
-      if (sg->global_attrs.count("gradient_entry_mapping")) {
-        // If this is a backward subgraph node, we need to fetch the attribute of its
-        // forward node (also a subgraph node) for inference. There are two cases:
+      if (sg->global_attrs.count("gradient_node_mapping")) {
+        // If this is a standalone backward subgraph node, we need to fetch the
+        // attribute of its forward node (also a subgraph node) for inference.
+        // There are two cases:
         //  - If in top-level, the gradient node has a control dependency that connects
         //    to the forward node.
         //  - Otherwise, the forward node is in another subgraph. We need to find the
         //    node using "gradient_node_mapping".
         if (fwd_attr_col != nullptr) {
-          // TODO(minjie): Foward node is in another graph.
-          LOG(FATAL) << "Not implemented.";
+          // Forward node is in another subgraph.
           const auto& node_mapping =
-            graph->GetGlobalAttr<vector<uint32_t>>("gradient_node_mapping");
+            sg->GetGlobalAttr<vector<uint32_t>>("gradient_node_mapping");
           const uint32_t fwd_nid = node_mapping[nid];
           CHECK_LT(fwd_nid, fwd_attr_col->children.size());
           sub_fwd_attr_col = fwd_attr_col->children[fwd_nid].get();

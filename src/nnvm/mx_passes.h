@@ -9,6 +9,7 @@
 #include <mxnet/base.h>
 #include <mxnet/ndarray.h>
 #include <mxnet/operator.h>
+#include <mxnet/op_attr_types.h>
 #include <nnvm/pass.h>
 #include <nnvm/op_attr_types.h>
 
@@ -99,6 +100,7 @@ struct GradNodeInInfo {
 }  // namespace grad
 
 namespace shape {
+static const std::string key = "shape";
 struct MXInferShapeArgs {
   // Shapes of the input entries.
   std::vector<TShape> shape_inputs;
@@ -120,6 +122,7 @@ struct MXInferShapeArgs {
 }  // namespace shape
 
 namespace dtype {
+static const std::string key = "dtype";
 struct MXInferTypeArgs {
   // Types of the input entries.
   std::vector<int> dtype_inputs;
@@ -140,6 +143,10 @@ struct MXInferTypeArgs {
 };
 }  // namespace dtype
 
+namespace ctx {
+static const std::string key = "context";
+}  // namespace ctx
+
 namespace inplace {
 static const std::string key = "inplace_option";
 struct InplaceOption {
@@ -148,6 +155,10 @@ struct InplaceOption {
   bool is_identity;
 };
 }  // namespace inplace
+
+namespace mutate {
+static const std::string key = "mutate_index";
+}  // namespace mutate
 
 namespace plan_memory {
 static const std::string key = "storage";
@@ -163,6 +174,7 @@ struct Storage {
 }  // namespace plan_memory
 
 namespace attach_op {
+static const std::string key = "op_execs";
 /*!
  * \brief executor to execute an operator
  * This is a graph executor dependent interface

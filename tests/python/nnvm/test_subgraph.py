@@ -317,4 +317,4 @@ if __name__ == '__main__':
     #test_infer_shape_only_backward()
     #test_plan_memory_no_subgraph()
     #test_plan_memory_subgraph()
-    #test_plan_memory_subgraph_grad()
+    test_plan_memory_subgraph_grad()
