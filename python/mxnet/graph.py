@@ -10,7 +10,7 @@ from io import StringIO
 from .attribute import AttrScope
 from .base import _LIB
 from .base import check_call, c_array, c_str, mx_uint, py_str
-from .base import GraphHandle, SymbolHandle
+from .base import GraphHandle, SymbolHandle, NDArrayHandle
 from .symbol import Symbol, Variable
 from .name import NameManager
 
@@ -124,6 +124,17 @@ class Graph(object):
             keys, vals,
             ctypes.byref(out)))
         return Graph(out)
+
+    def eval(self, inputs):
+        # TODO
+        output_handles = ctypes.POINTER(NDArrayHandle)()
+        num_outputs = ctypes.c_int(0)
+        check_call(_LIB.MXGraphEval(
+            self._handle,
+            ctypes.c_int(len(inputs)),
+            c_array(NDArrayHandle, [arr.handle for arr in inputs]),
+            ctypes.byref(num_outputs),
+            ctypes.byref(output_handles)))
 
 def create(symbol, name=None):
     handle = _create_graph_handle(symbol)

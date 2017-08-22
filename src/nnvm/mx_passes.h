@@ -190,10 +190,6 @@ static const std::string key = "op_execs";
  */
 class OpExecutor {
  public:
-  /*! \brief input arrays */
-  std::vector<NDArray> in_array;
-  /*! \brief output data arrays */
-  std::vector<NDArray> out_array;
   /*! \brief output requirement on each array */
   std::vector<OpReqType> req;
   /*! \brief runtime op context, contains allocated resources */
@@ -205,7 +201,23 @@ class OpExecutor {
    * this can be called multiple times if NDArray changed during reshape.
    *  It is safe to call it via asynchronize engine lambda
    */
-  virtual void Setup() = 0;
+  //virtual void Setup() = 0;
+  void SetInput(const NDArray& nd, size_t idx) {
+    CHECK_LT(idx, in_array_.size());
+    in_array_[idx] = nd;
+    *in_tblob_ptr_[idx] = nd.data();
+  }
+  void SetOutput(const NDArray& nd, size_t idx) {
+    CHECK_LT(idx, out_array_.size());
+    out_array_[idx] = nd;
+    *out_tblob_ptr_[idx] = nd.data();
+  }
+  const NDArray& GetInput(size_t idx) {
+    return in_array_[idx];
+  }
+  const NDArray& GetOutput(size_t idx) {
+    return out_array_[idx];
+  }
   /*!
    * \brief run the operator given runtime context on device.
    *  This function call do not synchronize the stream.
@@ -214,6 +226,23 @@ class OpExecutor {
   virtual void Run(RunContext rctx) = 0;
   /*! \return the execution type */
   virtual Operator::ExecType exec_type() const = 0;
+ 
+ protected:
+  void Reset(size_t num_inputs, size_t num_outputs) {
+    in_array_.clear();
+    out_array_.clear();
+    in_tblob_ptr_.clear();
+    out_tblob_ptr_.clear();
+    in_array_.resize(num_inputs);
+    in_tblob_ptr_.resize(num_inputs, nullptr);
+    out_array_.resize(num_outputs);
+    out_tblob_ptr_.resize(num_outputs, nullptr);
+  }
+
+  /*! \brief Input and output arrays. */
+  std::vector<NDArray> in_array_, out_array_;
+  /*! \brief Input and output tblob pointers. */
+  std::vector<TBlob*> in_tblob_ptr_, out_tblob_ptr_;
 };
 
 }  // namespace attach_op

@@ -12,18 +12,25 @@
 namespace mxnet {
 namespace exec {
 
+struct OpNode;
+struct OpEntry;
+
 // TODO(minjie):
 // * Bulk Execution
 // * DetectInplaceAddTo
 // * Multi-devices, Data Parallelism
 class GraphExecutorV2 {
  public:
+  struct EvalOption {
+    bool is_train{false};
+  };
+
   GraphExecutorV2(const nnvm::Graph& graph,
                   const Context& default_ctx);
 
   void Eval(const std::vector<NDArray>& inputs,
             const std::vector<NDArray>& outputs,
-            bool is_train);
+            const EvalOption& option);
 
   void AllocateResources();
 
@@ -41,7 +48,6 @@ class GraphExecutorV2 {
   void ReleaseDataEntries();
 
  private:
-  struct OpNode;
   // The graph to be evaluated.
   const nnvm::Graph& graph_;
   // Default context to evaluate the graph (if context column is not provided).
@@ -56,7 +62,7 @@ class GraphExecutorV2 {
   // Note that the NDArray here shares the memory pointer with the NDArray in
   // data_pool_. The reason why we use NDArray rather than NDArray pointer is
   // because different entries may have different shapes.
-  nnvm::ColumnRef<NDArray> data_entry_;
+  // nnvm::ColumnRef<NDArray> data_entry_;
   // Internal data pool of allocated entries. Note that all NDArrays are 1D
   // arrays to represent memory buffers.
   std::vector<NDArray> data_pool_;

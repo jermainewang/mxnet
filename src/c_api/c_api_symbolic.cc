@@ -5,6 +5,7 @@
  */
 #include <mxnet/base.h>
 #include <mxnet/c_api.h>
+#include <mxnet/ndarray.h>
 #include <nnvm/c_api.h>
 #include <nnvm/graph.h>
 #include <nnvm/pass.h>
@@ -12,6 +13,7 @@
 #include <nnvm/symbolic.h>
 #include "./c_api_common.h"
 #include "../operator/operator_common.h"
+#include "../nnvm/graph_executor_v2.h"
 
 namespace mxnet {
 namespace op {
@@ -692,5 +694,25 @@ int MXSymbolCreateGraphSymbol(GraphHandle ghdl,
   *s = Symbol::CreateFunctor(*pg, _ExtractSymbolKWArgs(num_param, keys, vals));
   *out = s;
   API_END_HANDLE_ERROR(delete s;);
+}
+
+int MXGraphEval(GraphHandle graph,
+                int num_inputs,
+                NDArrayHandle *inputs,
+                int *num_outputs,
+                NDArrayHandle **outputs) {
+  using nnvm::GraphPtr;
+  using nnvm::any;
+  using exec::GraphExecutorV2;
+  API_BEGIN();
+  GraphPtr pg = *static_cast<GraphPtr*>(graph);
+  std::unordered_map<std::string, std::shared_ptr<any>> kwargs_any;
+  // TODO(minjie): hard-code for testing.
+  kwargs_any["default_ctx"] = std::make_shared<any>(Context::CPU());
+  nnvm::Specialize(pg.get(), kwargs_any);
+  GraphExecutorV2 executor(*pg, Context::CPU());
+  executor.AllocateResources();
+
+  API_END();
 }
 /////////////// Subgraph APIs

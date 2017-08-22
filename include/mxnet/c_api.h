@@ -1649,6 +1649,11 @@ MXNET_DLL int MXSymbolCreateGraphSymbol(GraphHandle graph,
                                         const char **keys,
                                         const char **vals,
                                         SymbolHandle *out);
+MXNET_DLL int MXGraphEval(GraphHandle graph,
+                          int num_inputs,
+                          NDArrayHandle *inputs,
+                          int *num_outputs,
+                          NDArrayHandle **outputs);
 /////////////// Subgraph APIs
 
 

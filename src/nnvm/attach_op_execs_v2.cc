@@ -35,38 +35,42 @@ class ForwardOpExecutor : public OpExecutor {
     mkl_tblobs_prv_to_cpu(aux_data_);
 #endif
   }
-
-  void Setup() override {
-    in_data_.clear(); aux_data_.clear();
-    for (size_t i = 0; i < in_array.size(); ++i) {
-      if (!std::binary_search(aux_index_.begin(), aux_index_.end(), i)) {
-        in_data_.push_back(in_array[i].data());
-      } else {
-        aux_data_.push_back(in_array[i].data());
-      }
-    }
-    out_data_.resize(out_array.size());
-    std::transform(out_array.begin(), out_array.end(), out_data_.begin(), [](const NDArray& nd) {
-        return nd.data();
-      });
-  }
   Operator::ExecType exec_type() const override {
     return op_->exec_type();
   }
-
   shared_ptr<Operator> op() const {
     return op_;
   }
-
   explicit ForwardOpExecutor(shared_ptr<Operator> op,
-      vector<uint32_t> aux_index)
-      : op_(op), aux_index_(aux_index) {
-    std::sort(aux_index_.begin(), aux_index_.end());
+                             const OperatorProperty* prop,
+                             vector<uint32_t> aux_index)
+      : op_(op) {
+    const size_t num_inputs = prop->ListArguments().size() + aux_index.size();
+    const size_t num_outputs = prop->NumOutputs();
+    this->Reset(num_inputs, num_outputs);
+    out_data_.resize(prop->NumOutputs());
+    in_data_.resize(prop->ListArguments().size());
+    aux_data_.resize(aux_index.size());
+    // Setup in tblob pointer.
+    std::sort(aux_index.begin(), aux_index.end());
+    size_t nml_top = 0, aux_top = 0;
+    for (size_t i = 0; i < num_inputs; ++i) {
+      if (!std::binary_search(aux_index.begin(), aux_index.end(), i)) {
+        CHECK_GT(in_data_.size(), nml_top);
+        in_tblob_ptr_[i] = &in_data_[nml_top++];
+      } else {
+        CHECK_GT(aux_data_.size(), aux_top);
+        in_tblob_ptr_[i] = &aux_data_[aux_top++];
+      }
+    }
+    // Setup out tblob pointer.
+    for (size_t i = 0; i < num_outputs; ++i) {
+      out_tblob_ptr_[i] = &out_data_[i];
+    }
   }
 
  private:
   shared_ptr<Operator> op_;
-  vector<uint32_t> aux_index_;
   vector<TBlob> in_data_, out_data_, aux_data_;
 };
 
@@ -85,36 +89,19 @@ class BackwardOpExecutor : public OpExecutor {
     mkl_tblobs_prv_to_cpu(aux_data_);
 #endif
   }
-  void Setup() override {
-    size_t arg_top = 0, aux_top = 0;
-    aux_data_.resize(aux_index_.size());
-    for (size_t i = 0; i < in_array.size(); ++i) {
-      if (!std::binary_search(aux_index_.begin(), aux_index_.end(), i)) {
-        CHECK_GT(arg_data_ptr_.size(), arg_top);
-        *arg_data_ptr_[arg_top++] = in_array[i].data();
-      } else {
-        aux_data_.at(aux_top++) = in_array[i].data();
-      }
-    }
-    CHECK_EQ(out_array.size(), in_grad_.size());
-    std::transform(out_array.begin(), out_array.end(),
-                   in_grad_.begin(), [](const NDArray& nd) {
-        return nd.data();
-      });
-  }
   Operator::ExecType exec_type() const override {
     return op_->exec_type();
   }
   explicit BackwardOpExecutor(shared_ptr<Operator> op,
                               const OperatorProperty* prop,
                               vector<uint32_t> aux_index)
-      : op_(op), aux_index_(aux_index) {
-    std::sort(aux_index_.begin(), aux_index_.end());
+      : op_(op) {
     out_grad_.resize(prop->NumVisibleOutputs());
     in_data_.resize(prop->ListArguments().size());
     in_grad_.resize(in_data_.size());
     out_data_.resize(prop->NumOutputs());
-
+    aux_data_.resize(aux_index.size());
+    // Compute backward dependencies.
     vector<TBlob*> out_grad_ptr(out_grad_.size());
     for (size_t i = 0; i < out_grad_.size(); ++i) {
       out_grad_ptr[i] = &out_grad_[i];
@@ -127,15 +114,33 @@ class BackwardOpExecutor : public OpExecutor {
     for (size_t i = 0; i < out_data_.size(); ++i) {
       out_data_ptr[i] = &out_data_[i];
     }
-    arg_data_ptr_ = prop->BackwardInputs(
+    vector<TBlob*> bwd_in_ptr = prop->BackwardInputs(
         out_grad_ptr, in_data_ptr, out_data_ptr);
+    const size_t num_inputs = bwd_in_ptr.size() + aux_index.size();
+    const size_t num_outputs = in_data_.size();
+    this->Reset(num_inputs, num_outputs);
+    // Setup input tblob pointers.
+    std::sort(aux_index.begin(), aux_index.end());
+    size_t nml_top = 0, aux_top = 0;
+    for (size_t i = 0; i < num_inputs; ++i) {
+      if (!std::binary_search(aux_index.begin(), aux_index.end(), i)) {
+        CHECK_GT(bwd_in_ptr.size(), nml_top);
+        in_tblob_ptr_[i] = bwd_in_ptr[nml_top++];
+      } else {
+        CHECK_GT(aux_data_.size(), aux_top);
+        in_tblob_ptr_[i] = &aux_data_[aux_top++];
+      }
+    }
+    // Setup output tblob pointers.
+    for (size_t i = 0; i < out_tblob_ptr_.size(); ++i) {
+      out_tblob_ptr_[i] = &in_grad_[i];
+    }
   }
 
  private:
   shared_ptr<Operator> op_;
-  vector<uint32_t> aux_index_;
-  vector<TBlob> out_grad_, in_grad_, in_data_, out_data_, aux_data_;
-  vector<TBlob*> arg_data_ptr_;
+  vector<TBlob> out_grad_, in_data_, out_data_, aux_data_;
+  vector<TBlob> in_grad_;
 };
 
 // fcompute executor executor
@@ -149,20 +154,25 @@ class FComputeExecutor : public OpExecutor {
     mkl_tblobs_prv_to_cpu(out_data_);
 #endif
   }
-  void Setup() override {
-    in_data_.resize(in_array.size());
-    out_data_.resize(out_array.size());
-    auto get_blob =  [](const NDArray& nd) {
-      return nd.data();
-    };
-    std::transform(in_array.begin(), in_array.end(), in_data_.begin(), get_blob);
-    std::transform(out_array.begin(), out_array.end(), out_data_.begin(), get_blob);
-  }
   Operator::ExecType exec_type() const override {
     return Operator::kSync;
   }
-  explicit FComputeExecutor(FCompute fcompute, const NodeAttrs& attrs)
+  explicit FComputeExecutor(FCompute fcompute,
+                            const NodeAttrs& attrs,
+                            size_t num_inputs,
+                            size_t num_outputs)
       : fcompute_(fcompute), attrs_(attrs) {
+    in_data_.resize(num_inputs);
+    out_data_.resize(num_outputs);
+    this->Reset(num_inputs, num_outputs);
+    // Setup input tblob pointers.
+    for (size_t i = 0; i < num_inputs; ++i) {
+      in_tblob_ptr_[i] = &in_data_[i];
+    }
+    // Setup output tblob pointers.
+    for (size_t i = 0; i < num_outputs; ++i) {
+      out_tblob_ptr_[i] = &out_data_[i];
+    }
   }
 
   static FCompute GetFCompute(const Op* op, Context ctx) {
@@ -269,19 +279,21 @@ void AttachOpExecsRec(const Graph& g,
         shared_ptr<Operator> opr;
         opr.reset(fcreate_layer_op[node->op()](
               node->attrs, vctx->value[nid], ishape, itype));
-        execs->value[nid] = std::make_shared<ForwardOpExecutor>(opr, midx);
+        const auto* opprop = mxnet::op::OpPropGetOpProperty(node->attrs);
+        execs->value[nid] = std::make_shared<ForwardOpExecutor>(opr, opprop, midx);
       } else if (is_layer_backward.get(node->op(), false)) {
         CHECK_GE(node->control_deps.size(), 1);
         const uint32_t fwd_nid = idx.node_id(node->control_deps[0].get());
         CHECK(vctx->value[fwd_nid] == vctx->value[nid]);
         shared_ptr<OpExecutor> fwd_opexec =
           CHECK_NOTNULL(execs->value[fwd_nid]);
+        const auto* opprop = mxnet::op::OpPropGetOpProperty(node->attrs);
         execs->value[nid] = std::make_shared<BackwardOpExecutor>(
             dynamic_cast<ForwardOpExecutor*>(fwd_opexec.get())->op(),
-            mxnet::op::OpPropGetOpProperty(node->attrs),
-            midx);
+            opprop, midx);
       } else if (fcompute != nullptr) {
-        execs->value[nid] = std::make_shared<FComputeExecutor>(fcompute, node->attrs);
+        execs->value[nid] = std::make_shared<FComputeExecutor>(
+            fcompute, node->attrs, node->inputs.size(), node->num_outputs());
       } else {
         LOG(INFO) << "FCompute not registered for operator " << node->op()->name;
       }

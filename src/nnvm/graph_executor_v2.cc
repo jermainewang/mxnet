@@ -37,7 +37,7 @@ using StorageRef = pass::plan_memory::StorageRef;
 // Information about operational node
 struct OpNode {
   // The name of the operator
-  const char* opr_name;
+  const char* opr_name = "";
   // the context of the node
   Context ctx;
   // The executor
@@ -52,6 +52,12 @@ struct OpNode {
   vector<Engine::VarHandle> mutate_vars;
 };
 
+struct OpEntry {
+  TShape shape;
+  int dtype;
+  pass::plan_memory::StorageRef storage_ref;
+};
+
 GraphExecutorV2::GraphExecutorV2(const Graph& graph, const Context& default_ctx)
   :graph_(graph), default_context_(default_ctx),
    required_graph_attrs_(_InitRequiredGraphAttrs()) {
@@ -60,9 +66,10 @@ GraphExecutorV2::GraphExecutorV2(const Graph& graph, const Context& default_ctx)
 
 void GraphExecutorV2::Eval(const vector<NDArray>& inputs,
                            const vector<NDArray>& outputs,
-                           bool is_train) {
+                           const EvalOption& option) {
   CHECK(resource_allocated_)
     << "Resources must be allocated before evaluating the graph.";
+  // TODO
 }
 
 void GraphExecutorV2::AllocateResources() {
@@ -70,16 +77,18 @@ void GraphExecutorV2::AllocateResources() {
     return;
   }
   resource_allocated_ = true;
-  AllocateOpResources();
+  LOG(INFO) << "Allocating data entries.";
   AllocateDataEntries();
+  LOG(INFO) << "Allocating operator resources.";
+  AllocateOpResources();
 }
 
 void GraphExecutorV2::ReleaseResources() {
   if (!resource_allocated_) {
     return;
   }
-  ReleaseOpResources();
   ReleaseDataEntries();
+  ReleaseOpResources();
   resource_allocated_ = false;
 }
 
@@ -96,6 +105,7 @@ void AllocateOpResourcesRec(const Graph& graph,
   const auto& idx = graph.indexed_graph();
   // Resource allocation
   for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
+    LOG(INFO) << "Allocating operator resources for node#" << nid;
     const Node* node = idx[nid].source;
     if (node->is_variable()) {
       continue;
@@ -134,60 +144,43 @@ void CreateOpNode(const Graph& graph,
                   uint32_t nid,
                   shared_ptr<OpExecutor> exec,
                   const Context& ctx,
-                  const Column<StorageRef>* mem_plan,
-                  const Column<NDArray>* data_entry,
+                  const vector<OpEntry>& in_entries,
+                  const vector<OpEntry>& out_entries,
+                  const vector<NDArray>& data_pool,
                   OpNode* opnode) {
   using pass::plan_memory::kNull;
   const auto& idx = graph.indexed_graph();
   const Node* node = idx[nid].source;
 
+  CHECK_EQ(node->inputs.size(), in_entries.size());
+  CHECK_EQ(node->num_outputs(), out_entries.size());
+
   const bool is_async = exec->exec_type() == Operator::kAsync;
   const bool is_gpu = ctx.dev_mask() == gpu::kDevMask;
-  CHECK_EQ(exec->in_array.size(), 0U);
-  CHECK_EQ(exec->out_array.size(), 0U);
+
   // Attach input data entries (ndarrays).
-  for (const auto& e : node->inputs) {
-    const uint32_t eid = idx.entry_id(e);
-    exec->in_array.push_back(data_entry->value[eid]);
+  for (size_t i = 0; i < node->inputs.size(); ++i) {
+    const OpEntry& ent = in_entries[i];
+    const auto& nd = data_pool[ent.storage_ref.storage_id].AsArray(ent.shape, ent.dtype);
+    exec->SetInput(nd, i);
   }
   // Attach output data entries (ndarrays).
   for (uint32_t i = 0; i < node->num_outputs(); ++i) {
-    const uint32_t eid = idx.entry_id(nid, i);
-    exec->out_array.push_back(data_entry->value[eid]);
+    const OpEntry& ent = out_entries[i];
+    const auto& nd = data_pool[ent.storage_ref.storage_id].AsArray(ent.shape, ent.dtype);
+    exec->SetOutput(nd, i);
     if (false) {
       // TODO(minjie): addto inplace optimization.
-    } else if (mem_plan->value[eid].inplace_index >= 0) {
+    } else if (ent.storage_ref.inplace_index >= 0) {
       exec->req.push_back(kWriteInplace);
-    } else if (mem_plan->value[eid].storage_id == kNull) {
+    } else if (ent.storage_ref.storage_id == kNull) {
       // TODO(minjie): need double-check.
       exec->req.push_back(kNullOp);
     } else {
       exec->req.push_back(kWriteTo);
     }
   }
-  // Setup variables
-  std::vector<Engine::VarHandle> use_vars, mutate_vars;
-  for (size_t i = 0; i < exec->in_array.size(); ++i) {
-    auto& nd = exec->in_array[i];
-    use_vars.push_back(nd.var());
-  }
-  for (auto& r : exec->op_ctx.requested) {
-    mutate_vars.push_back(r.var);
-  }
-  for (auto& nd : exec->out_array) {
-    mutate_vars.push_back(nd.var());
-  }
-  // Remove dupliated vars.
-  Engine::Get()->DeduplicateVarHandle(&use_vars, &mutate_vars);
-  // all vars include both mutate vars and use vars
-  std::vector<Engine::VarHandle> all_vars(use_vars);
-  std::copy(mutate_vars.begin(), mutate_vars.end(),
-      std::inserter(all_vars, all_vars.end()));
-  // setup exec vars
-  Engine::Get()->PushSync([exec](RunContext rctx) {
-      exec->Setup();
-      }, Context::CPU(), {}, all_vars, FnProperty::kNormal, 0,
-      PROFILER_MESSAGE("SetupExec"));
+  // Execution functor.
   auto exec_fun = [exec, is_async, is_gpu] (
       RunContext ctx, Engine::CallbackOnComplete on_complete) {
     if (is_async) {
@@ -207,6 +200,20 @@ void CreateOpNode(const Graph& graph,
       on_complete();
     }
   };
+  // Setup variables
+  std::vector<Engine::VarHandle> use_vars, mutate_vars;
+  for (size_t i = 0; i < node->inputs.size(); ++i) {
+    use_vars.push_back(exec->GetInput(i).var());
+  }
+  for (auto& r : exec->op_ctx.requested) {
+    mutate_vars.push_back(r.var);
+  }
+  for (size_t i = 0; i < node->num_outputs(); ++i) {
+    mutate_vars.push_back(exec->GetOutput(i).var());
+  }
+  // Remove dupliated vars.
+  Engine::Get()->DeduplicateVarHandle(&use_vars, &mutate_vars);
+  LOG(INFO) << "Create OpNode for node#" << nid << ": " << node->attrs.name;
   // Save everything.
   opnode->exec = exec;
   opnode->ctx = ctx;
@@ -220,12 +227,17 @@ void CreateOpNode(const Graph& graph,
 
 void CreateCachedOpsRec(const Graph& graph,
                         const Column<shared_ptr<OpExecutor>>* op_execs,
-                        const Column<Context>* vctx,
+                        const Column<TShape>* shapes,
+                        const Column<int>* dtypes,
+                        const Column<Context>* ctx,
                         const Column<StorageRef>* mem_plan,
-                        const Column<NDArray>* data_entry,
                         const Context& default_ctx,
+                        const vector<NDArray>& data_pool,
                         Column<OpNode>* op_nodes) {
   const auto& idx = graph.indexed_graph();
+  static auto f_is_valid_ent = [] (const OpEntry& ent) {
+      return ent.shape.ndim() != 0 && ent.dtype != -1 && ent.storage_ref.storage_id >= 0;
+    };
   // setup the array and requirements.
   for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
     const Node* node = idx[nid].source;
@@ -240,19 +252,46 @@ void CreateCachedOpsRec(const Graph& graph,
     if (node->is_graph()) {
       // TODO
     } else {
-      // TODO(minjie): all operators that use inputs and generate outputs should
-      // not be created since the engine variables are unknown at the moment.
-      CreateOpNode(graph, nid, 
-                   op_execs->value[nid],
-                   (vctx != nullptr)? vctx->value[nid] : default_ctx,
-                   mem_plan, data_entry, &op_nodes->value[nid]);
+      vector<OpEntry> in_entries, out_entries;
+      for (size_t i = 0; i < node->inputs.size(); ++i) {
+        const uint32_t eid = idx.entry_id(node->inputs[i]);
+        in_entries.emplace_back(
+            OpEntry{shapes->value[eid], dtypes->value[eid], mem_plan->value[eid]});
+      }
+      for (size_t i = 0; i < node->num_outputs(); ++i) {
+        const uint32_t eid = idx.entry_id(nid, i);
+        out_entries.emplace_back(
+            OpEntry{shapes->value[eid], dtypes->value[eid], mem_plan->value[eid]});
+      }
+      if (std::all_of(in_entries.begin(), in_entries.end(), f_is_valid_ent)
+          && std::all_of(out_entries.begin(), out_entries.end(), f_is_valid_ent)) {
+        CreateOpNode(graph, nid, 
+                     op_execs->value[nid],
+                     (ctx != nullptr)? ctx->value[nid] : default_ctx,
+                     in_entries, out_entries, data_pool, &op_nodes->value[nid]);
+      }
     }
   }
 }
 
 void GraphExecutorV2::AllocateOpResources() {
-  // TODO
+  using pass::plan_memory::StorageRef;
   // Use global resource pool for each executor for now.
+  std::map<Context, Resource> cached_temp;
+  const auto* op_execs = graph_.node_attrs.GetColumn<shared_ptr<OpExecutor>>(
+      pass::attach_op::key).get();
+  const Column<Context>* ctx = nullptr;
+  if (graph_.node_attrs.count(pass::ctx::key)) {
+    ctx = graph_.node_attrs.GetColumn<Context>(pass::ctx::key).get();
+  }
+  const auto* shapes = graph_.entry_attrs.GetColumn<TShape>(pass::shape::key).get();
+  const auto* dtypes = graph_.entry_attrs.GetColumn<int>(pass::dtype::key).get();
+  const auto* mem_plan = graph_.entry_attrs.GetColumn<StorageRef>(pass::plan_memory::ref_key).get();
+  AllocateOpResourcesRec(graph_, op_execs, ctx, default_context_, &cached_temp);
+  op_nodes_ = graph_.CreateNodeColumn<OpNode>();
+  LOG(INFO) << "Creating cached operator for execution.";
+  CreateCachedOpsRec(graph_, op_execs, shapes, dtypes, ctx, mem_plan, default_context_,
+                     data_pool_, op_nodes_.CopyOnWrite());
 }
 
 void GraphExecutorV2::AllocateDataEntries() {
@@ -268,16 +307,19 @@ void GraphExecutorV2::AllocateDataEntries() {
     CHECK_LE(nword, std::numeric_limits<nnvm::dim_t>::max());
     TShape shape{static_cast<nnvm::dim_t>(nword)};
     // TODO(minjie): only use default ctx.
+    LOG(INFO) << "Allocate data entry#" << data_pool_.size() << " size=" << nword << " floats.";
     data_pool_.push_back(NDArray(shape, default_context_));
   }
 }
 
 void GraphExecutorV2::ReleaseOpResources() {
   // TODO
+  LOG(FATAL) << "Not implemented.";
 }
 
 void GraphExecutorV2::ReleaseDataEntries() {
   // TODO
+  LOG(FATAL) << "Not implemented.";
 }
 
 }  // namespace exec

@@ -235,7 +235,7 @@ class GraphAllocator {
 
   vector<plan_memory::Storage> GetAllStorage() const {
     using plan_memory::Storage;
-    vector<Storage> ret(data_.size());
+    vector<Storage> ret;
     for (const auto& d : data_) {
       ret.emplace_back(Storage{d->id, d->device_id, d->max_bytes});
     }
@@ -655,9 +655,22 @@ Graph MXPlanMemory(Graph&& graph) {
       min_storages = allocator.GetAllStorage();
     }
   }
+
+  {
+  ostringstream oss;
+  oss << "[" << endl;
+  for (size_t i = 0; i < min_storages.size(); ++i) {
+    oss << "\tStorage#" << i << " id=" << min_storages[i].id
+      << " size=" << min_storages[i].max_bytes << endl;
+  }
+  oss << "]";
+  LOG(INFO) << oss.str();
+  }
+
   graph.entry_attrs.SetColumn(plan_memory::ref_key, min_storage_ref);
   graph.global_attrs[plan_memory::storage_key] =
     std::make_shared<any>(std::move(min_storages));
+
   return graph;
 }
 
