@@ -144,7 +144,8 @@ struct MXInferTypeArgs {
 }  // namespace dtype
 
 namespace ctx {
-static const std::string key = "context";
+static const std::string device_key = "device";
+static const std::string ctx_key = "context";
 }  // namespace ctx
 
 namespace inplace {

@@ -618,15 +618,14 @@ size_t PlanMemoryRec(const Graph& graph,
 // function to plan memory
 Graph MXPlanMemory(Graph&& graph) {
   const auto* shape =
-    graph.entry_attrs.GetColumn<TShape>("shape").get();
+    graph.entry_attrs.GetColumn<TShape>(shape::key).get();
   const auto* dtype =
-    graph.entry_attrs.GetColumn<int>("dtype").get();
+    graph.entry_attrs.GetColumn<int>(dtype::key).get();
   const auto* inplace_option =
-    graph.node_attrs.GetColumn<vector<InplaceOption>>("inplace_option").get();
+    graph.node_attrs.GetColumn<vector<InplaceOption>>(inplace::key).get();
   const auto* ignored_inputs =
     graph.node_attrs.GetColumn<vector<uint32_t>>("ignored_inputs").get();
-  const auto* device = (graph.entry_attrs.count("device") == 0)?
-    nullptr : graph.entry_attrs.GetColumn<int>("device").get();
+  const auto* device = graph.entry_attrs.GetColumn<int>(ctx::device_key).get();
 
   const auto& idx = graph.indexed_graph();
   size_t min_allocated_bytes = -1;
@@ -678,10 +677,11 @@ NNVM_REGISTER_PASS(MXPlanMemory)
 .describe("Plan the memory allocation of each node entries.")
 .set_body(MXPlanMemory)
 .set_change_graph(false)
-.depend_entry_attr("dtype")
-.depend_entry_attr("shape")
+.depend_entry_attr(shape::key)
+.depend_entry_attr(dtype::key)
 .depend_node_attr(inplace::key)
 .depend_node_attr("ignored_inputs")
+.depend_node_attr(ctx::device_key)
 .provide_entry_attr(plan_memory::ref_key)
 .provide_global_attr(plan_memory::storage_key)
 ;

@@ -14,7 +14,8 @@ namespace {
 vector<string> _InitRequiredGraphAttrs() {
   return {pass::shape::key,
           pass::dtype::key,
-          //pass::ctx::key,
+          pass::ctx::device_key,
+          pass::ctx::ctx_key,
           pass::plan_memory::ref_key,
           pass::plan_memory::storage_key,
           pass::attach_op::key};
@@ -58,38 +59,31 @@ struct OpEntry {
   pass::plan_memory::StorageRef storage_ref;
 };
 
-GraphExecutorV2::GraphExecutorV2(const Graph& graph, const Context& default_ctx)
-  :graph_(graph), default_context_(default_ctx),
+GraphExecutorV2::GraphExecutorV2(const Graph& graph,
+                                 const GraphExecutorV2::Config& config)
+  :graph_(graph), config_(config),
    required_graph_attrs_(_InitRequiredGraphAttrs()) {
   _CheckAllAttrsExist(graph_, required_graph_attrs_);
+  AllocateResources();
 }
 
-void GraphExecutorV2::Eval(const vector<NDArray>& inputs,
-                           const vector<NDArray>& outputs,
-                           const EvalOption& option) {
-  CHECK(resource_allocated_)
-    << "Resources must be allocated before evaluating the graph.";
+void GraphExecutorV2::Run(const vector<NDArray>& inputs,
+                          const vector<NDArray>& outputs,
+                          const RunOption& option) {
   // TODO
 }
 
 void GraphExecutorV2::AllocateResources() {
-  if (resource_allocated_) {
-    return;
-  }
-  resource_allocated_ = true;
-  LOG(INFO) << "Allocating data entries.";
-  AllocateDataEntries();
-  LOG(INFO) << "Allocating operator resources.";
-  AllocateOpResources();
+  LOG(INFO) << "Pre-allocating all data entries.";
+  vector<NDArray> data_entries;
+  AllocateDataEntries(&data_entries);
+  LOG(INFO) << "Pre-allocating all operator resources.";
+  AllocateOpResources(data_entries);
 }
 
 void GraphExecutorV2::ReleaseResources() {
-  if (!resource_allocated_) {
-    return;
-  }
   ReleaseDataEntries();
   ReleaseOpResources();
-  resource_allocated_ = false;
 }
 
 const vector<string>& GraphExecutorV2::RequiredGraphAttrs() const {
@@ -98,11 +92,12 @@ const vector<string>& GraphExecutorV2::RequiredGraphAttrs() const {
 
 void AllocateOpResourcesRec(const Graph& graph,
                             const Column<shared_ptr<OpExecutor>>* op_execs,
-                            const Column<Context>* vctx,
-                            const Context& default_ctx,
+                            const Column<int>* vdevice,
                             map<Context, Resource>* cached_resources) {
+  // TODO(minjie): delay alloc resources when config.dynamic_allocation is true.
   static auto& fresource = Op::GetAttr<FResourceRequest>("FResourceRequest");
   const auto& idx = graph.indexed_graph();
+  const auto& context = graph.GetGlobalAttr<vector<Context>>(pass::ctx::ctx_key);
   // Resource allocation
   for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
     LOG(INFO) << "Allocating operator resources for node#" << nid;
@@ -120,7 +115,7 @@ void AllocateOpResourcesRec(const Graph& graph,
         requested.clear();
         // Get the resource of temporal space.
         for (const ResourceRequest& req : reqs) {
-          const Context &ctx = (vctx != nullptr)? vctx->value[nid] : default_ctx;
+          const Context &ctx = context.at(vdevice->value[nid]);
           if (req.type == ResourceRequest::kTempSpace) {
             if (cached_resources->count(ctx) != 0) {
               requested.push_back(cached_resources->at(ctx));
@@ -229,12 +224,12 @@ void CreateCachedOpsRec(const Graph& graph,
                         const Column<shared_ptr<OpExecutor>>* op_execs,
                         const Column<TShape>* shapes,
                         const Column<int>* dtypes,
-                        const Column<Context>* ctx,
+                        const Column<int>* vdevice,
                         const Column<StorageRef>* mem_plan,
-                        const Context& default_ctx,
                         const vector<NDArray>& data_pool,
                         Column<OpNode>* op_nodes) {
   const auto& idx = graph.indexed_graph();
+  const auto& context = graph.GetGlobalAttr<vector<Context>>(pass::ctx::ctx_key);
   static auto f_is_valid_ent = [] (const OpEntry& ent) {
       return ent.shape.ndim() != 0 && ent.dtype != -1 && ent.storage_ref.storage_id >= 0;
     };
@@ -267,48 +262,48 @@ void CreateCachedOpsRec(const Graph& graph,
           && std::all_of(out_entries.begin(), out_entries.end(), f_is_valid_ent)) {
         CreateOpNode(graph, nid, 
                      op_execs->value[nid],
-                     (ctx != nullptr)? ctx->value[nid] : default_ctx,
+                     context.at(vdevice->value[nid]),
                      in_entries, out_entries, data_pool, &op_nodes->value[nid]);
       }
     }
   }
 }
 
-void GraphExecutorV2::AllocateOpResources() {
+void GraphExecutorV2::AllocateOpResources(const vector<NDArray>& data_entries) {
   using pass::plan_memory::StorageRef;
   // Use global resource pool for each executor for now.
   std::map<Context, Resource> cached_temp;
   const auto* op_execs = graph_.node_attrs.GetColumn<shared_ptr<OpExecutor>>(
       pass::attach_op::key).get();
-  const Column<Context>* ctx = nullptr;
-  if (graph_.node_attrs.count(pass::ctx::key)) {
-    ctx = graph_.node_attrs.GetColumn<Context>(pass::ctx::key).get();
-  }
+  const Column<int>* device = graph_.node_attrs.GetColumn<int>(pass::ctx::device_key).get();
   const auto* shapes = graph_.entry_attrs.GetColumn<TShape>(pass::shape::key).get();
   const auto* dtypes = graph_.entry_attrs.GetColumn<int>(pass::dtype::key).get();
   const auto* mem_plan = graph_.entry_attrs.GetColumn<StorageRef>(pass::plan_memory::ref_key).get();
-  AllocateOpResourcesRec(graph_, op_execs, ctx, default_context_, &cached_temp);
+  AllocateOpResourcesRec(graph_, op_execs, device, &cached_temp);
   op_nodes_ = graph_.CreateNodeColumn<OpNode>();
   LOG(INFO) << "Creating cached operator for execution.";
-  CreateCachedOpsRec(graph_, op_execs, shapes, dtypes, ctx, mem_plan, default_context_,
-                     data_pool_, op_nodes_.CopyOnWrite());
+  CreateCachedOpsRec(graph_, op_execs, shapes, dtypes, device, mem_plan,
+                     data_entries, op_nodes_.CopyOnWrite());
 }
 
-void GraphExecutorV2::AllocateDataEntries() {
+void GraphExecutorV2::AllocateDataEntries(vector<NDArray>* data_entries) {
   using pass::plan_memory::Storage;
   using pass::plan_memory::StorageRef;
   using pass::plan_memory::storage_key;
+  using pass::ctx::ctx_key;
   const auto& storage = graph_.GetGlobalAttr<vector<Storage>>(storage_key);
-  data_pool_.reserve(storage.size());
+  const auto& context = graph_.GetGlobalAttr<vector<Context>>(ctx_key);
+  const bool delay_alloc = !config_.dynamic_allocation;
+  data_entries->reserve(storage.size());
   for (const Storage& st : storage) {
     // XXX(minjie): Use float array for all dtype allocation. Should change
     // to other dtype in the future.
     const size_t nword = (st.max_bytes + 3) / 4;
     CHECK_LE(nword, std::numeric_limits<nnvm::dim_t>::max());
     TShape shape{static_cast<nnvm::dim_t>(nword)};
-    // TODO(minjie): only use default ctx.
-    LOG(INFO) << "Allocate data entry#" << data_pool_.size() << " size=" << nword << " floats.";
-    data_pool_.push_back(NDArray(shape, default_context_));
+    LOG(INFO) << "Allocate data entry#" << data_entries->size()
+              << " size=" << nword << " floats.";
+    data_entries->push_back(NDArray(shape, context.at(st.device_id), delay_alloc));
   }
 }
 

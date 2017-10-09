@@ -21,27 +21,31 @@ struct OpEntry;
 // * Multi-devices, Data Parallelism
 class GraphExecutorV2 {
  public:
-  struct EvalOption {
+  struct Config {
+    bool dynamic_allocation{false};
+    bool zero_copy{false};
+  };
+  struct RunOption {
     bool is_train{false};
   };
 
   GraphExecutorV2(const nnvm::Graph& graph,
-                  const Context& default_ctx);
+                  const Config& config);
 
-  void Eval(const std::vector<NDArray>& inputs,
-            const std::vector<NDArray>& outputs,
-            const EvalOption& option);
-
-  void AllocateResources();
-
-  void ReleaseResources();
+  void Run(const std::vector<NDArray>& inputs,
+           const std::vector<NDArray>& outputs,
+           const RunOption& option);
 
   const std::vector<std::string>& RequiredGraphAttrs() const;
 
  private:
-  void AllocateOpResources();
+  void AllocateResources();
 
-  void AllocateDataEntries();
+  void ReleaseResources();
+
+  void AllocateOpResources(const std::vector<NDArray>& data_entries);
+
+  void AllocateDataEntries(std::vector<NDArray>* data_entries);
 
   void ReleaseOpResources();
 
@@ -50,12 +54,9 @@ class GraphExecutorV2 {
  private:
   // The graph to be evaluated.
   const nnvm::Graph& graph_;
-  // Default context to evaluate the graph (if context column is not provided).
-  const Context default_context_;
+  const Config config_;
   // Attributes required for graph evaluation.
   const std::vector<std::string> required_graph_attrs_;
-  // A flag indicating whether the resources are allocated.
-  bool resource_allocated_{false};
   // Operator nodes.
   nnvm::ColumnRef<OpNode> op_nodes_;
   // Internal data entry of each node.
@@ -65,7 +66,7 @@ class GraphExecutorV2 {
   // nnvm::ColumnRef<NDArray> data_entry_;
   // Internal data pool of allocated entries. Note that all NDArrays are 1D
   // arrays to represent memory buffers.
-  std::vector<NDArray> data_pool_;
+  //std::vector<NDArray> data_pool_;
 };
 
 }  // namespace exec

@@ -197,13 +197,14 @@ class FComputeExecutor : public OpExecutor {
 void AttachOpExecsRec(const Graph& g,
                       const Column<TShape>* vshape,
                       const Column<int>* vdtype,
-                      const Column<Context>* vctx,
+                      const Column<int>* vdevice,
                       const Column<vector<uint32_t>>* mutate_index,
                       const Column<shared_ptr<OpExecutor>>* fwd_execs,
                       Column<shared_ptr<OpExecutor>>* execs) {
   static auto& fcreate_layer_op = nnvm::Op::GetAttr<FCreateLayerOp>("FCreateLayerOp");
   static auto& is_layer_backward = nnvm::Op::GetAttr<bool>("TIsLayerOpBackward");
   const auto& idx = g.indexed_graph();
+  const auto& context = g.GetGlobalAttr<vector<Context>>(ctx::ctx_key);
 
   if (fwd_execs != nullptr) {
     // This is a standalone backward graph.
@@ -261,14 +262,15 @@ void AttachOpExecsRec(const Graph& g,
       AttachOpExecsRec(*subgraph,
                        vshape->children[nid].get(),
                        vdtype->children[nid].get(),
-                       vctx->children[nid].get(),
+                       vdevice->children[nid].get(),
                        mutate_index->children[nid].get(),
                        sub_fwd_execs,
                        subref.CopyOnWrite());
       execs->children[nid] = subref;
     } else {
       const vector<uint32_t>& midx = mutate_index->value[nid];
-      FCompute fcompute = FComputeExecutor::GetFCompute(node->op(), vctx->value[nid]);
+      FCompute fcompute = FComputeExecutor::GetFCompute(
+          node->op(), context.at(vdevice->value[nid]));
       if (fcreate_layer_op.count(node->op())) {
         vector<TShape> ishape;
         vector<int> itype;
@@ -278,13 +280,13 @@ void AttachOpExecsRec(const Graph& g,
         }
         shared_ptr<Operator> opr;
         opr.reset(fcreate_layer_op[node->op()](
-              node->attrs, vctx->value[nid], ishape, itype));
+              node->attrs, context.at(vdevice->value[nid]), ishape, itype));
         const auto* opprop = mxnet::op::OpPropGetOpProperty(node->attrs);
         execs->value[nid] = std::make_shared<ForwardOpExecutor>(opr, opprop, midx);
       } else if (is_layer_backward.get(node->op(), false)) {
         CHECK_GE(node->control_deps.size(), 1);
         const uint32_t fwd_nid = idx.node_id(node->control_deps[0].get());
-        CHECK(vctx->value[fwd_nid] == vctx->value[nid]);
+        CHECK(vdevice->value[fwd_nid] == vdevice->value[nid]);
         shared_ptr<OpExecutor> fwd_opexec =
           CHECK_NOTNULL(execs->value[fwd_nid]);
         const auto* opprop = mxnet::op::OpPropGetOpProperty(node->attrs);
@@ -306,7 +308,7 @@ Graph MXAttachOpExecs(Graph &&graph) {
     auto ref = graph.CreateNodeColumn<shared_ptr<OpExecutor>>();
     const auto* shapes = graph.entry_attrs.GetColumn<TShape>(shape::key).get();
     const auto* dtypes = graph.entry_attrs.GetColumn<int>(dtype::key).get();
-    const auto* ctx = graph.node_attrs.GetColumn<Context>(ctx::key).get();
+    const auto* vdevice = graph.node_attrs.GetColumn<int>(ctx::device_key).get();
     const auto* mutate = graph.node_attrs.GetColumn<vector<uint32_t>>(mutate::key).get();
     using FwdExecsType = const Column<shared_ptr<OpExecutor>>*;
     FwdExecsType fwd_execs = nullptr;
@@ -316,7 +318,7 @@ Graph MXAttachOpExecs(Graph &&graph) {
     AttachOpExecsRec(graph,
                      shapes,
                      dtypes,
-                     ctx,
+                     vdevice,
                      mutate,
                      fwd_execs,
                      ref.CopyOnWrite());
@@ -331,7 +333,8 @@ NNVM_REGISTER_PASS(MXAttachOpExecs)
 .set_change_graph(false)
 .depend_entry_attr(shape::key)
 .depend_entry_attr(dtype::key)
-.depend_node_attr(ctx::key)
+.depend_node_attr(ctx::device_key)
+.depend_global_attr(ctx::ctx_key)
 .depend_node_attr(mutate::key)
 .provide_node_attr(attach_op::key);
 
