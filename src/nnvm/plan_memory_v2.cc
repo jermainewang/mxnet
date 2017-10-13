@@ -534,9 +534,11 @@ size_t PlanMemoryRec(const Graph& graph,
       // Do nothing for variable inputs. Variable inputs are usually from external
       // storage. If this is a subgraph, the storage has already been specified
       // by the parent graph.
-      continue;
-    }
-    if (node->is_graph()) {
+      const uint32_t eid = idx.entry_id(nid, 0);
+      if (storage->value[eid].storage_id == plan_memory::kNull) {
+        storage->value[eid].storage_id = plan_memory::kExternalStorageID;
+      }
+    } else if (node->is_graph()) {
       // XXX(minjie): Reuse of subgraph's memory plan can only be done if *all*
       // the given arguments are the same (e.g. shape/type/device/etc.). Since
       // the reuse check itself may be quite costly already, currently we never
@@ -625,7 +627,7 @@ Graph MXPlanMemory(Graph&& graph) {
     graph.node_attrs.GetColumn<vector<InplaceOption>>(inplace::key).get();
   const auto* ignored_inputs =
     graph.node_attrs.GetColumn<vector<uint32_t>>("ignored_inputs").get();
-  const auto* device = graph.entry_attrs.GetColumn<int>(ctx::device_key).get();
+  const auto* device = graph.node_attrs.GetColumn<int>(ctx::device_key).get();
 
   const auto& idx = graph.indexed_graph();
   size_t min_allocated_bytes = -1;

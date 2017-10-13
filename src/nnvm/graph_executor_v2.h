@@ -13,7 +13,6 @@ namespace mxnet {
 namespace exec {
 
 struct OpNode;
-struct OpEntry;
 
 // TODO(minjie):
 // * Bulk Execution
@@ -24,17 +23,19 @@ class GraphExecutorV2 {
   struct Config {
     bool dynamic_allocation{false};
     bool zero_copy{false};
+    Config() {}
   };
   struct RunOption {
     bool is_train{false};
+    RunOption() {}
   };
 
   GraphExecutorV2(const nnvm::Graph& graph,
-                  const Config& config);
+                  const Config& config = Config());
 
-  void Run(const std::vector<NDArray>& inputs,
-           const std::vector<NDArray>& outputs,
-           const RunOption& option);
+  void Run(const std::vector<NDArray>& arguments,
+           std::vector<NDArray>* results,
+           const RunOption& option = RunOption());
 
   const std::vector<std::string>& RequiredGraphAttrs() const;
 
@@ -51,6 +52,12 @@ class GraphExecutorV2 {
 
   void ReleaseDataEntries();
 
+  void FeedArgArray(const NDArray& array, size_t i,
+                    std::unordered_set<uint32_t>* touched_nodes);
+  void FeedRstArray(const NDArray& array, size_t i,
+                    std::unordered_set<uint32_t>* touched_nodes);
+  const NDArray& FetchRstArray(size_t i);
+
  private:
   // The graph to be evaluated.
   const nnvm::Graph& graph_;
@@ -59,14 +66,9 @@ class GraphExecutorV2 {
   const std::vector<std::string> required_graph_attrs_;
   // Operator nodes.
   nnvm::ColumnRef<OpNode> op_nodes_;
-  // Internal data entry of each node.
-  // Note that the NDArray here shares the memory pointer with the NDArray in
-  // data_pool_. The reason why we use NDArray rather than NDArray pointer is
-  // because different entries may have different shapes.
-  // nnvm::ColumnRef<NDArray> data_entry_;
-  // Internal data pool of allocated entries. Note that all NDArrays are 1D
-  // arrays to represent memory buffers.
-  //std::vector<NDArray> data_pool_;
+  // Data structure used to feed argument to the operator.
+  typedef std::pair<uint32_t, size_t> OpInputEntry;
+  std::vector<std::vector<OpInputEntry>> arg_to_op_input_;
 };
 
 }  // namespace exec

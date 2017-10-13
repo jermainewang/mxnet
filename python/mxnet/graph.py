@@ -5,13 +5,13 @@ import ctypes
 import json
 import os as _os
 import sys as _sys
-from io import StringIO
 
 from .attribute import AttrScope
 from .base import _LIB
 from .base import check_call, c_array, c_str, mx_uint, py_str
 from .base import GraphHandle, SymbolHandle, NDArrayHandle
 from .symbol import Symbol, Variable
+from .ndarray import NDArray
 from .name import NameManager
 
 # Use different version of SymbolBase
@@ -91,9 +91,7 @@ class Graph(object):
         vals = []
         for k, v in kwargs.items():
             keys.append(c_str(k))
-            io = StringIO()
-            json.dump(v, io)
-            vals.append(c_str(io.getvalue()))
+            vals.append(c_str(json.dumps(v)))
         keys = c_array(ctypes.c_char_p, keys)
         vals = c_array(ctypes.c_char_p, vals)
         check_call(_LIB.MXGraphSpecialize(
@@ -110,9 +108,7 @@ class Graph(object):
         vals = []
         for k, v in kwargs.items():
             keys.append(c_str(k))
-            io = StringIO()
-            json.dump(v, io)
-            vals.append(c_str(io.getvalue()))
+            vals.append(c_str(json.dumps(v)))
         keys = c_array(ctypes.c_char_p, keys)
         vals = c_array(ctypes.c_char_p, vals)
         out = GraphHandle()
@@ -135,6 +131,11 @@ class Graph(object):
             c_array(NDArrayHandle, [arr.handle for arr in inputs]),
             ctypes.byref(num_outputs),
             ctypes.byref(output_handles)))
+        if num_outputs.value == 1:
+            return NDArray(ctypes.cast(output_handles[0], NDArrayHandle))
+        else:
+            return [NDArray(ctypes.cast(output_handles[i], NDArrayHandle))
+                    for i in range(num_output.value)]
 
 def create(symbol, name=None):
     handle = _create_graph_handle(symbol)

@@ -704,15 +704,45 @@ int MXGraphEval(GraphHandle graph,
   using nnvm::GraphPtr;
   using nnvm::any;
   using exec::GraphExecutorV2;
+  MXAPIThreadLocalEntry *ret = MXAPIThreadLocalStore::Get();
+
   API_BEGIN();
   GraphPtr pg = *static_cast<GraphPtr*>(graph);
+  const auto& idx = pg->indexed_graph();
   std::unordered_map<std::string, std::shared_ptr<any>> kwargs_any;
   // TODO(minjie): hard-code for testing.
-  kwargs_any["default_ctx"] = std::make_shared<any>(Context::CPU());
+  std::vector<Context> ctx = {Context::CPU()};
+  kwargs_any["context"] = std::make_shared<any>(std::move(ctx));
   nnvm::Specialize(pg.get(), kwargs_any);
-  GraphExecutorV2 executor(*pg, Context::CPU());
-  executor.AllocateResources();
 
+  GraphExecutorV2::Config cfg;
+  cfg.zero_copy = true;
+  GraphExecutorV2 executor(*pg, cfg);
+
+  std::vector<NDArray> arguments, results;
+  // Feed argument arrays.
+  NDArray** args_ptr = reinterpret_cast<NDArray**>(inputs);
+  for (int i = 0; i < num_inputs; ++i) {
+    arguments.push_back(*args_ptr[i]);
+  }
+  // Create result arrays.
+  NDArray** rsts_ptr = *reinterpret_cast<NDArray***>(outputs);
+  if (rsts_ptr != nullptr) {
+    for (int i = 0; i < *num_outputs; ++i) {
+      results.push_back(*rsts_ptr[i]);
+    }
+  }
+  executor.Run(arguments, &results);
+  if (rsts_ptr == nullptr) {
+    *num_outputs = results.size();
+    // TODO(minjie): num visible outputs
+    ret->ret_handles.clear();
+    for (int i = 0; i < *num_outputs; ++i) {
+      ret->ret_handles.push_back(
+          reinterpret_cast<NDArrayHandle>(new NDArray(std::move(results[i]))));
+    }
+    *outputs = dmlc::BeginPtr(ret->ret_handles);
+  }
   API_END();
 }
 /////////////// Subgraph APIs
