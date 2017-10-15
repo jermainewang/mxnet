@@ -306,7 +306,7 @@ inline MXGradientArgs LoadArgs(const string& json_str) {
   return ret;
 }
 
-const vector<IndexedGraph::NodeEntry> ExtractXS(
+vector<IndexedGraph::NodeEntry> ExtractXS(
     const IndexedGraph& idx, const MXGradientArgs& args) {
   CHECK(args.xs.empty() || args.xs_blacklist.empty())
     << "Only one of \"xs\" and \"xs_blacklist\" arguments should be provided.";
@@ -337,7 +337,7 @@ const vector<IndexedGraph::NodeEntry> ExtractXS(
   return xs;
 }
 
-const vector<IndexedGraph::NodeEntry> ExtractYS(
+vector<IndexedGraph::NodeEntry> ExtractYS(
     const IndexedGraph& idx, const MXGradientArgs& args) {
   CHECK(args.ys.empty() || args.ys_blacklist.empty())
     << "Only one of \"ys\" and \"ys_blacklist\" arguments should be provided.";
@@ -363,6 +363,28 @@ const vector<IndexedGraph::NodeEntry> ExtractYS(
     }
   }
   return ys;
+}
+
+vector<NodeEntry> ConvertToNodeEntry(
+    const Graph& graph,
+    const vector<IndexedGraph::NodeEntry>& idx_entries) {
+  vector<NodePtr> nodes(idx_entries.size());
+  unordered_map<uint32_t, size_t> nid2vecidx;
+  for (size_t i = 0; i < idx_entries.size(); ++i) {
+    nid2vecidx[idx_entries[i].node_id] = i;
+  }
+  const auto& idx = graph.indexed_graph();
+  DFSVisit(graph.outputs, [&](const NodePtr& node) {
+      const uint32_t nid = idx.node_id(node.get());
+      if (nid2vecidx.count(nid)) {
+        nodes[nid2vecidx[nid]] = node;
+      }
+    });
+  vector<NodeEntry> entries;
+  for (size_t i = 0; i < idx_entries.size(); ++i) {
+    entries.emplace_back(NodeEntry{nodes[i], idx_entries[i].index, 0});
+  }
+  return entries;
 }
 
 Graph GradientRec(const Graph& fwd_graph,
@@ -403,15 +425,17 @@ Graph GradientRec(const Graph& fwd_graph,
     });
 
   // Feed ys_grad into the map.
+  const vector<NodeEntry>& ys_entries = ConvertToNodeEntry(fwd_graph, ys);
   for (size_t i = 0; i < ys.size(); ++i) {
-    const Node* ys_node = fwd_graph_idx[ys[i].node_id].source;
+    const NodePtr& ys_node = ys_entries[i].node;
+    const size_t ent_index = ys_entries[i].index;
     ostringstream oss;
-    oss << ys_node->attrs.name << "$" << "output" << ys[i].index
-      << "$" << "grad";
+    oss << "_head_grad$" << ys_node->attrs.name << "$" << ent_index;
     NodePtr ys_grad_var = Node::Create();
     ys_grad_var->attrs.op = nullptr;
     ys_grad_var->attrs.name = oss.str();
-    node2outgrads.at(ys_node)[ys[i].index].AddGrad(
+    ys_grad_var->control_deps.push_back(ys_node);
+    node2outgrads.at(ys_node.get())[ent_index].AddGrad(
         NodeEntry{ys_grad_var, 0, 0});
     inent_map.insert({ys_grad_var.get(), GradNodeInInfo::CreateFromOutGrads(i)});
   }

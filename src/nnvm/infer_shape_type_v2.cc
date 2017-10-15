@@ -70,6 +70,7 @@ class InferAttrPass {
         }
       }
     }
+
     /*LOG(INFO) << "Provided attrs: [";
     for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
       for (size_t i = 0; i < idx[nid].source->num_outputs(); ++i) {
@@ -262,8 +263,8 @@ class InferAttrPass {
         << " Bwd ent#" << bwd_eid << ": " << attr->value[bwd_eid];
     }*/
     
-    // Attributes of the grad_in entries are equal to what of the input entries
-    // of the forward node.
+    // Attributes of the output entries (i.e, grad_in) are equal to the
+    // attributes of the input entries of the forward node.
     CHECK_LE(inode.source->num_outputs(), fwd_ptr->inputs.size());
     for (size_t i = 0; i < inode.source->num_outputs(); ++i) {
       const uint32_t fwd_eid = idx.entry_id(fwd_ptr->inputs[i]);
@@ -278,19 +279,6 @@ class InferAttrPass {
     }
     // XXX(minjie): Handle grad_out entries. This original logic should not be
     // needed since "gradient_entry_mapping" should handle this.
-    // Attributes of the grad_out entries are equal to what of the output
-    // entries of the forward node.
-    /*for (size_t i = 0; i < inode.inputs.size(); ++i) {
-      const uint32_t fwd_eid = idx.entry_id(fwd_nid, i);
-      const uint32_t bwd_eid = idx.entry_id(inode.inputs[i]);
-      if (attr->value[bwd_eid] == empty_val_) {
-        attr->value[bwd_eid] = attr->value[fwd_eid];
-      } else {
-        CHECK_EQ(attr->value[bwd_eid], attr->value[fwd_eid])
-            << "Backward " << attr_name_ << " is inconsistent with the forward "
-            << attr_name_;
-      }
-    }*/
   }
 
   void InferNormalOpNode(const Graph* graph,
@@ -343,6 +331,7 @@ class InferAttrPass {
 
     const IndexedGraph& idx = graph->indexed_graph();
     const auto& inode = idx[nid];
+    const Node* node = inode.source;
 
     // Short cut if all input/output attributes has known.
     bool all_known = true;
@@ -359,9 +348,34 @@ class InferAttrPass {
       return;
     }
 
-    if (inode.source->is_graph()) {
+    if (node->is_variable()) {
+      if (node->control_deps.empty()) {
+        return;
+      }
+      // Head grad variable node.
+      // 1. The first control dependency is point to the forward node.
+      // 2. The name encodes which output this variable node represent
+      //    for.
+      LOG(INFO) << "Find head grad node: " << node->attrs.name;
+      const uint32_t fwd_nid = idx.node_id(node->control_deps[0].get());
+      const string& namestr = node->attrs.name;
+      size_t pos = namestr.find_last_of('$');
+      const string& entidxstr = namestr.substr(pos, namestr.size() - pos - 1);
+      const size_t fwd_ent_idx = atoi(entidxstr.c_str());
+      LOG(INFO) << "Find head grad node: fwdnid=" << fwd_nid << " "
+        << "fwdentidx=" << fwd_ent_idx;
+      const uint32_t fwd_eid = idx.entry_id(fwd_nid, fwd_ent_idx);
+      const uint32_t bwd_eid = idx.entry_id(nid, 0);
+      if (attr->value[bwd_eid] == empty_val_) {
+        attr->value[bwd_eid] = attr->value[fwd_eid];
+      } else {
+        CHECK_EQ(attr->value[bwd_eid], attr->value[fwd_eid])
+            << "Backward " << attr_name_ << " is inconsistent with the forward "
+            << attr_name_;
+      }
+    } else if (node->is_graph()) {
       InferGraphNode(graph, nid, attr, fwd_attr_col);
-    } else if (!inode.source->is_variable()) {
+    } else {
       InferOpNode(graph, nid, attr); 
     }
   }

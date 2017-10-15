@@ -18,7 +18,6 @@ def _conv_block():
     net = sym.Convolution(net, name='conv', num_filter=32, kernel=(3,3), stride=(1,1), pad=(1,1))
     net = sym.BatchNorm(net, name='bn')
     net = sym.Activation(net, name='relu', act_type='relu')
-    #net = sym.Pooling(net, name='pool', kernel=(2,2), stride=(2,2), pool_type='max')
     g = graph.create(net)
     return g
 
@@ -77,9 +76,13 @@ def test_conv_compose_no_share():
     net = ConvBlock(data=net, name='conv2')
     assert net.list_arguments() == [
             'data',
-            'conv1_conv_weight', 'conv1_conv_bias', 'conv1_bn_gamma', 'conv1_bn_beta', 'conv1_bn_moving_mean', 'conv1_bn_moving_var',
-            'conv2_conv_weight', 'conv2_conv_bias', 'conv2_bn_gamma', 'conv2_bn_beta', 'conv2_bn_moving_mean', 'conv2_bn_moving_var'
-            ]
+            'conv1_conv_weight', 'conv1_conv_bias', 'conv1_bn_gamma', 'conv1_bn_beta',
+            'conv2_conv_weight', 'conv2_conv_bias', 'conv2_bn_gamma', 'conv2_bn_beta']
+    assert net.list_auxiliary_states() == [
+            'conv1_bn_moving_mean', 'conv1_bn_moving_var',
+            'conv2_bn_moving_mean', 'conv2_bn_moving_var']
+    assert set(net.list_inputs()) == set(net.list_arguments()).union(set(net.list_auxiliary_states()))
+    assert net.list_outputs() == ['conv2_output']
 
 def test_conv_compose_share():
     ConvBlock = graph.symbolize(_conv_block())
@@ -90,9 +93,13 @@ def test_conv_compose_share():
     assert net.list_arguments() == [
             'data',
             'conv_weight',
-            'conv1_conv_bias', 'conv1_bn_gamma', 'conv1_bn_beta', 'conv1_bn_moving_mean', 'conv1_bn_moving_var',
-            'conv2_conv_bias', 'conv2_bn_gamma', 'conv2_bn_beta', 'conv2_bn_moving_mean', 'conv2_bn_moving_var'
-            ]
+            'conv1_conv_bias', 'conv1_bn_gamma', 'conv1_bn_beta',
+            'conv2_conv_bias', 'conv2_bn_gamma', 'conv2_bn_beta',]
+    assert net.list_auxiliary_states() == [
+            'conv1_bn_moving_mean', 'conv1_bn_moving_var',
+            'conv2_bn_moving_mean', 'conv2_bn_moving_var']
+    assert set(net.list_inputs()) == set(net.list_arguments()).union(set(net.list_auxiliary_states()))
+    assert net.list_outputs() == ['conv2_output']
 
 def test_specialize_dot():
     g = _conv_block()
@@ -179,7 +186,7 @@ def test_infer_shape_no_subgraph():
     print(g.get_node_entry_attr("shape"))
     # Test with grad
     g_grad = _conv_block_with_grad(mode=kFullGraph)
-    args = {'shape_inputs' : [[], [256, 32, 100, 100]]}
+    args = {'shape_inputs' : [[256, 32, 100, 100]]}
     g_grad.specialize(save_dot=True)
     _Viz(g_grad.get_global_attr("dot")[1])
     g_grad.specialize(mx_infer_shape_args=args)
@@ -207,7 +214,7 @@ def test_infer_shape_subgraph2():
 
 def test_infer_shape_subgraph_grad1():
     g = _conv_net_with_grad(mode=kFullGraph)
-    args = {'shape_inputs' : [[], [256, 32, 100, 100]]}
+    args = {'shape_inputs' : [[256, 32, 100, 100]]}
     g.specialize(mx_infer_shape_args=args)
     print(g.get_node_entry_attr("shape"))
 
@@ -227,7 +234,7 @@ def test_infer_shape_subgraph_grad2():
                     {'node': 13}] # conv2_bn_moving_var
     args = {'xs_blacklist' : xs_blacklist}
     net_graph = net_graph.transform(["MXGradientFull"], mx_gradient_args=args)
-    args = {'shape_inputs' : [[], [256, 32, 100, 100]]}
+    args = {'shape_inputs' : [[256, 32, 100, 100]]}
     net_graph.specialize(mx_infer_shape_args=args)
     print(net_graph.get_node_entry_attr("shape"))
 
@@ -236,8 +243,9 @@ def test_infer_shape_only_backward():
     args = {'shape_inputs' : [[256, 32, 100, 100]]}
     g.specialize(mx_infer_shape_args=args)
     fwd_shapes = g.get_node_entry_attr("shape")[1]
+    print(fwd_shapes)
     g_grad = _conv_block_with_grad(mode=kOnlyBackward)
-    args = {'shape_inputs' : [[], [256, 32, 100, 100]],
+    args = {'shape_inputs' : [[256, 32, 100, 100]],
             'forward_shapes' : fwd_shapes}
     g_grad.specialize(mx_infer_shape_args=args)
     print(g_grad.get_node_entry_attr("shape"))
@@ -252,8 +260,8 @@ def test_plan_memory_no_subgraph():
                  graph_frozen=1)
     # Test with grad
     g_grad = _conv_block_with_grad(mode=kFullGraph)
-    shape_args = {'shape_inputs' : [[], [256, 32, 100, 100]]}
-    dtype_args = {'dtype_inputs' : [-1, 0]}
+    shape_args = {'shape_inputs' : [[256, 32, 100, 100]]}
+    dtype_args = {'dtype_inputs' : [0]}
     g_grad.specialize(mx_infer_shape_args=shape_args,
                       mx_infer_dtype_args=dtype_args,
                       graph_frozen=1)
@@ -293,28 +301,28 @@ def test_plan_memory_subgraph_grad():
                     {'node': 13}] # conv2_bn_moving_var
     args = {'xs_blacklist' : xs_blacklist}
     net_graph = net_graph.transform(["MXGradientFull"], mx_gradient_args=args)
-    shape_args = {'shape_inputs' : [[], [256, 32, 100, 100]]}
-    dtype_args = {'dtype_inputs' : [-1, 0]}
+    shape_args = {'shape_inputs' : [[256, 32, 100, 100]]}
+    dtype_args = {'dtype_inputs' : [0]}
     net_graph.specialize(mx_infer_shape_args=shape_args,
                          mx_infer_dtype_args=dtype_args,
                          graph_frozen=1)
 
 if __name__ == '__main__':
-    #test_conv_compose_no_share()
-    #test_conv_compose_share()
-    #test_specialize_dot()
-    #test_specialize_json()
-    #test_specialize_coloring()
-    #test_transform_grad_no_subgraph()
-    #test_transform_grad_subgraph()
-    #test_transform_grad_only_backward()
-    #test_high_order_grad()
-    #test_infer_shape_no_subgraph()
-    #test_infer_shape_subgraph1()
-    #test_infer_shape_subgraph2()
-    #test_infer_shape_subgraph_grad1()
-    #test_infer_shape_subgraph_grad2()
+    test_conv_compose_no_share()
+    test_conv_compose_share()
+    test_specialize_dot()
+    test_specialize_json()
+    test_specialize_coloring()
+    test_transform_grad_no_subgraph()
+    test_transform_grad_subgraph()
+    test_transform_grad_only_backward()
+    test_high_order_grad()
+    test_infer_shape_no_subgraph()
+    test_infer_shape_subgraph1()
+    test_infer_shape_subgraph2()
+    test_infer_shape_subgraph_grad1()
+    test_infer_shape_subgraph_grad2()
     #test_infer_shape_only_backward()
-    #test_plan_memory_no_subgraph()
-    #test_plan_memory_subgraph()
+    test_plan_memory_no_subgraph()
+    test_plan_memory_subgraph()
     test_plan_memory_subgraph_grad()

@@ -12,8 +12,22 @@ def _conv_block():
     net = sym.Convolution(net, name='conv', num_filter=8, kernel=(3,3), stride=(1,1), pad=(1,1))
     net = sym.BatchNorm(net, name='bn')
     net = sym.Activation(net, name='relu', act_type='relu')
-    #net = sym.Pooling(net, name='pool', kernel=(2,2), stride=(2,2), pool_type='max')
     g = graph.create(net)
+    return g
+
+def _conv_block_with_grad(mode=kOnlyForward):
+    g = _conv_block()
+    # Compute gradients for all inputs using all outputs.
+    # The gradient graph is also generated separately.
+    xs_blacklist = [{'node': 6},  # bn_moving_mean
+                    {'node': 7}]  # bn_moving_var
+    args = {'xs_blacklist' : xs_blacklist}
+    if mode == kFullGraph:
+        g = g.transform(["MXGradientFull"], mx_gradient_args=args)
+    elif mode == kOnlyForward:
+        g = g.transform(["MXGradient"], mx_gradient_args=args)
+    else:
+        g = g.transform(["MXGradientOnlyBackward"], mx_gradient_args=args)
     return g
 
 def test_simple_eval():
@@ -35,5 +49,16 @@ def test_simple_eval():
     results = g.eval([data, conv_w, conv_b, bn_gamma, bn_beta, bn_mean, bn_var])
     print(results, results.shape)
 
+def test_grad_eval():
+    g = _conv_block_with_grad(mode=kFullGraph)
+    shape_args = {'shape_inputs' : [[16, 8, 10, 10]]}
+    dtype_args = {'dtype_inputs' : [0]}
+    g.specialize(mx_infer_shape_args=shape_args,
+                 mx_infer_dtype_args=dtype_args,
+                 graph_frozen=1)
+    print(g.get_node_entry_attr("shape"))
+    print(g.get_node_entry_attr("dtype"))
+
 if __name__ == '__main__':
     test_simple_eval()
+    test_grad_eval()
