@@ -121,8 +121,33 @@ class Graph(object):
             ctypes.byref(out)))
         return Graph(out)
 
+    def create_input_arrays(self):
+        array_hdls = ctypes.POINTER(NDArrayHandle)()
+        num_inputs = ctypes.c_int(0)
+        check_call(_LIB.MXGraphCreateInputArrays(
+            self._handle,
+            ctypes.byref(num_inputs),
+            ctypes.byref(array_hdls)))
+        if num_inputs.value == 1:
+            return NDArray(ctypes.cast(array_hdls[0], NDArrayHandle))
+        else:
+            return [NDArray(ctypes.cast(array_hdls[i], NDArrayHandle))
+                    for i in range(num_inputs.value)]
+
+    def create_output_arrays(self):
+        array_hdls = ctypes.POINTER(NDArrayHandle)()
+        num_outputs = ctypes.c_int(0)
+        check_call(_LIB.MXGraphCreateOutputArrays(
+            self._handle,
+            ctypes.byref(num_outputs),
+            ctypes.byref(array_hdls)))
+        if num_outputs.value == 1:
+            return NDArray(ctypes.cast(array_hdls[0], NDArrayHandle))
+        else:
+            return [NDArray(ctypes.cast(array_hdls[i], NDArrayHandle))
+                    for i in range(num_outputs.value)]
+
     def eval(self, inputs):
-        # TODO
         output_handles = ctypes.POINTER(NDArrayHandle)()
         num_outputs = ctypes.c_int(0)
         check_call(_LIB.MXGraphEval(

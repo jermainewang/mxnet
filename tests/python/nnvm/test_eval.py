@@ -7,12 +7,15 @@ kOnlyForward = 0
 kOnlyBackward = 1
 kFullGraph = 2
 
-def _conv_block():
+def _conv_block_sym():
     net = sym.Variable('data')
     net = sym.Convolution(net, name='conv', num_filter=8, kernel=(3,3), stride=(1,1), pad=(1,1))
     net = sym.BatchNorm(net, name='bn')
     net = sym.Activation(net, name='relu', act_type='relu')
-    g = graph.create(net)
+    return net
+
+def _conv_block():
+    g = graph.create(_conv_block_sym())
     return g
 
 def _conv_block_with_grad(mode=kOnlyForward):
@@ -37,16 +40,11 @@ def test_simple_eval():
     g.specialize(mx_infer_shape_args=shape_args,
                  mx_infer_dtype_args=dtype_args,
                  graph_frozen=1)
-    print(g.get_node_entry_attr("shape"))
-    print(g.get_node_entry_attr("dtype"))
-    data = mx.nd.zeros([16, 8, 10, 10], ctx=mx.cpu())
-    conv_w = mx.nd.zeros([8, 8, 3, 3], ctx=mx.cpu())
-    conv_b = mx.nd.zeros([8,], ctx=mx.cpu())
-    bn_gamma = mx.nd.zeros([8,], ctx=mx.cpu())
-    bn_beta = mx.nd.zeros([8,], ctx=mx.cpu())
-    bn_mean = mx.nd.zeros([8,], ctx=mx.cpu())
-    bn_var = mx.nd.zeros([8,], ctx=mx.cpu())
-    results = g.eval([data, conv_w, conv_b, bn_gamma, bn_beta, bn_mean, bn_var])
+    in_arrays = g.create_input_arrays()
+    for a in in_arrays:
+        print('Input array: shape=%s, type=%s' % (str(a.shape), str(a.dtype)))
+        a[:] = 0
+    results = g.eval(in_arrays)
     print(results, results.shape)
 
 def test_grad_eval():
@@ -56,8 +54,13 @@ def test_grad_eval():
     g.specialize(mx_infer_shape_args=shape_args,
                  mx_infer_dtype_args=dtype_args,
                  graph_frozen=1)
-    print(g.get_node_entry_attr("shape"))
-    print(g.get_node_entry_attr("dtype"))
+    in_arrays = g.create_input_arrays()
+    for a in in_arrays:
+        print('Input array: shape=%s, type=%s' % (str(a.shape), str(a.dtype)))
+        a[:] = 0
+    results = g.eval(in_arrays)
+    for r in results:
+        print('Result array: shape=%s, type=%s' % (str(r.shape), str(r.dtype)))
 
 if __name__ == '__main__':
     test_simple_eval()

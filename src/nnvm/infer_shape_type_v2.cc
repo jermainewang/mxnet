@@ -317,7 +317,7 @@ class InferAttrPass {
     // Save to the result map.
     for (uint32_t i = 0; i < num_inputs; ++i) {
       attr->value[idx.entry_id(inode.inputs[i])] = iattr[i];
-      LOG(INFO) << "\tFwd ent#" << idx.entry_id(inode.inputs[i]) << ": " << iattr[i];
+      //LOG(INFO) << "\tFwd ent#" << idx.entry_id(inode.inputs[i]) << ": " << iattr[i];
     }
     for (uint32_t i = 0; i < num_outputs; ++i) {
       attr->value[idx.entry_id(nid, i)] = oattr[i];

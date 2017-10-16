@@ -1644,6 +1644,12 @@ MXNET_DLL int MXGraphGetNodeAttrJSON(GraphHandle graph,
 MXNET_DLL int MXGraphGetNodeEntryAttrJSON(GraphHandle graph,
                                           const char *key,
                                           const char **out);
+MXNET_DLL int MXGraphCreateInputArrays(GraphHandle graph,
+                                       int *num_inputs,
+                                       NDArrayHandle **in_arrays);
+MXNET_DLL int MXGraphCreateOutputArrays(GraphHandle graph,
+                                        int *num_outputs,
+                                        NDArrayHandle **out_arrays);
 MXNET_DLL int MXSymbolCreateGraphSymbol(GraphHandle graph,
                                         mx_uint num_param,
                                         const char **keys,

@@ -696,6 +696,61 @@ int MXSymbolCreateGraphSymbol(GraphHandle ghdl,
   API_END_HANDLE_ERROR(delete s;);
 }
 
+int MXGraphCreateInputArrays(GraphHandle graph,
+                             int *num_inputs,
+                             NDArrayHandle **in_arrays) {
+  using nnvm::GraphPtr;
+  MXAPIThreadLocalEntry *ret = MXAPIThreadLocalStore::Get();
+  API_BEGIN();
+  GraphPtr pg = *static_cast<GraphPtr*>(graph);
+  const auto& idx = pg->indexed_graph();
+  *num_inputs = idx.input_nodes().size();
+  CHECK(pg->entry_attrs.count("shape") && pg->entry_attrs.count("dtype"))
+    << "Cannot create input arrays. Graph need to be specialized"
+    << " for attributes \"shape\" and \"dtype\" beforehand.";
+  const auto& shapes = pg->entry_attrs.GetColumn<TShape>("shape");
+  const auto& dtypes = pg->entry_attrs.GetColumn<int>("dtype");
+  ret->ret_handles.clear();
+  // TODO(minjie): context.
+  const Context& ctx = Context::CPU();
+  for (int i = 0; i < *num_inputs; ++i) {
+    const uint32_t eid = idx.entry_id(idx.input_nodes()[i], 0);
+    ret->ret_handles.push_back(
+        reinterpret_cast<NDArrayHandle>(new NDArray(
+            shapes->value[eid], ctx, true, dtypes->value[eid])));
+  }
+  *in_arrays = dmlc::BeginPtr(ret->ret_handles);
+  API_END();
+}
+
+int MXGraphCreateOutputArrays(GraphHandle graph,
+                              int *num_outputs,
+                              NDArrayHandle **out_arrays) {
+  using nnvm::GraphPtr;
+  MXAPIThreadLocalEntry *ret = MXAPIThreadLocalStore::Get();
+  API_BEGIN();
+  GraphPtr pg = *static_cast<GraphPtr*>(graph);
+  const auto& idx = pg->indexed_graph();
+  *num_outputs = pg->outputs.size();
+  CHECK(pg->entry_attrs.count("shape") && pg->entry_attrs.count("dtype"))
+    << "Cannot create input arrays. Graph need to be specialized"
+    << " for attributes \"shape\" and \"dtype\" beforehand.";
+  const auto& shapes = pg->entry_attrs.GetColumn<TShape>("shape");
+  const auto& dtypes = pg->entry_attrs.GetColumn<int>("dtype");
+  ret->ret_handles.clear();
+  // TODO(minjie): context.
+  const Context& ctx = Context::CPU();
+  for (int i = 0; i < *num_outputs; ++i) {
+    const uint32_t eid = idx.entry_id(pg->outputs[i]);
+    ret->ret_handles.push_back(
+        reinterpret_cast<NDArrayHandle>(new NDArray(
+            shapes->value[eid], ctx, true, dtypes->value[eid])));
+  }
+  *out_arrays = dmlc::BeginPtr(ret->ret_handles);
+  API_END();
+
+}
+
 int MXGraphEval(GraphHandle graph,
                 int num_inputs,
                 NDArrayHandle *inputs,
