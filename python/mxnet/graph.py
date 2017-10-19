@@ -38,7 +38,7 @@ def _create_graph_handle(symbol):
 class Graph(object):
     def __init__(self, handle, name=None):
         self._handle = handle
-        self._name = NameManager.current.get(name, 'graph')
+        self._name = NameManager.current.get(name, '<graph') + '>'
         self._freezed = False
 
     @property
@@ -160,7 +160,7 @@ class Graph(object):
             return NDArray(ctypes.cast(output_handles[0], NDArrayHandle))
         else:
             return [NDArray(ctypes.cast(output_handles[i], NDArrayHandle))
-                    for i in range(num_output.value)]
+                    for i in range(num_outputs.value)]
 
 def create(symbol, name=None):
     handle = _create_graph_handle(symbol)

@@ -289,6 +289,7 @@ struct GradNodeOutInfo {
 namespace grad {
 enum GradMode {
   kFullGraph = 0,
+  kFullGraphWithOutput,
   kOnlyForward,
   kOnlyBackward,
 };
@@ -429,8 +430,14 @@ Graph GradientRec(const Graph& fwd_graph,
   for (size_t i = 0; i < ys.size(); ++i) {
     const NodePtr& ys_node = ys_entries[i].node;
     const size_t ent_index = ys_entries[i].index;
+    // XXX(minjie): Make sure the head grad node name is equal
+    // to "<output_name>/grad".
     ostringstream oss;
-    oss << "_head_grad$" << ys_node->attrs.name << "$" << ent_index;
+    oss << ys_node->attrs.name << "_output";
+    if (ys_node->num_outputs() != 1) {
+      oss << ent_index;
+    }
+    oss << "/grad";
     NodePtr ys_grad_var = Node::Create();
     ys_grad_var->attrs.op = nullptr;
     ys_grad_var->attrs.name = oss.str();
@@ -481,7 +488,8 @@ Graph GradientRec(const Graph& fwd_graph,
     if (legacy_bwd_node) {
       legacy_bwd2fwd[legacy_bwd_node] = node.get();
     }
-    if (mode != grad::kFullGraph) {
+    if (mode != grad::kFullGraph
+        && mode != grad::kFullGraphWithOutput) {
       SplitForwardBackward(in_grads, fwd_graph_idx, &fwdent2bwdent);
     }
     // Save input gradients.
@@ -494,18 +502,19 @@ Graph GradientRec(const Graph& fwd_graph,
 
   // Create gradient subgraph.
   shared_ptr<Graph> grad_g = std::make_shared<Graph>();
-  grad_g->outputs.reserve(xs.size());
+  if (mode == grad::kFullGraphWithOutput) {
+    grad_g->outputs = fwd_graph.outputs;
+  }
   for (const auto& e : xs) {
     const Node* n = fwd_graph_idx[e.node_id].source;
     GradEntry& ge = node2outgrads.at(n)[e.index];
     grad_g->outputs.push_back(ge.GetSum());
   }
-  const auto& grad_g_idx = grad_g->indexed_graph();
-
-  if (mode == grad::kFullGraph) {
+  if (mode == grad::kFullGraph || mode == grad::kFullGraphWithOutput) {
     return *grad_g;
   }
 
+  const auto& grad_g_idx = grad_g->indexed_graph();
   // Create new forward graph.
   // 1. First inserts visible outputs.
   Graph new_fwd_graph;
@@ -723,6 +732,11 @@ Graph MXGradientFull(const Graph& graph) {
   return GradientRec(graph, args, grad::kFullGraph);
 }
 
+Graph MXGradientFullWithOutput(const Graph& graph) {
+  const MXGradientArgs& args = LoadArgs(graph.GetGlobalAttr<string>("mx_gradient_args"));
+  return GradientRec(graph, args, grad::kFullGraphWithOutput);
+}
+
 Graph MXGradientOnlyBackward(const Graph& graph) {
   const MXGradientArgs& args = LoadArgs(graph.GetGlobalAttr<string>("mx_gradient_args"));
   return GradientRec(graph, args, grad::kOnlyBackward);
@@ -742,6 +756,13 @@ NNVM_REGISTER_PASS(MXGradient)
 NNVM_REGISTER_PASS(MXGradientFull)
 .describe("Transform the graph to compute both forward and backward.")
 .set_body(MXGradientFull)
+.set_change_graph(true)
+.depend_global_attr("mx_gradient_args")
+;
+
+NNVM_REGISTER_PASS(MXGradientFullWithOutput)
+.describe("Transform the graph to compute both forward and backward. It also keeps the forward outputs.")
+.set_body(MXGradientFullWithOutput)
 .set_change_graph(true)
 .depend_global_attr("mx_gradient_args")
 ;

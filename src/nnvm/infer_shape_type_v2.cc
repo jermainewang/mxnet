@@ -356,14 +356,13 @@ class InferAttrPass {
       // 1. The first control dependency is point to the forward node.
       // 2. The name encodes which output this variable node represent
       //    for.
-      LOG(INFO) << "Find head grad node: " << node->attrs.name;
+      LOG(INFO) << "Found head grad node: " << node->attrs.name;
       const uint32_t fwd_nid = idx.node_id(node->control_deps[0].get());
       const string& namestr = node->attrs.name;
-      size_t pos = namestr.find_last_of('$');
-      const string& entidxstr = namestr.substr(pos, namestr.size() - pos - 1);
+      size_t pos_st = namestr.find_last_of("output") + 6;
+      size_t pos_ed = namestr.find_last_of('/');
+      const string& entidxstr = namestr.substr(pos_st, pos_ed - pos_st);
       const size_t fwd_ent_idx = atoi(entidxstr.c_str());
-      LOG(INFO) << "Find head grad node: fwdnid=" << fwd_nid << " "
-        << "fwdentidx=" << fwd_ent_idx;
       const uint32_t fwd_eid = idx.entry_id(fwd_nid, fwd_ent_idx);
       const uint32_t bwd_eid = idx.entry_id(nid, 0);
       if (attr->value[bwd_eid] == empty_val_) {

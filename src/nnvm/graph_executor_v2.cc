@@ -131,7 +131,6 @@ void CreateOpNode(shared_ptr<OpExecutor> exec,
       }
       on_complete();
     }
-    // TODO(minjie): clear all input ndarrays.
   };
   // Setup variables
   std::vector<Engine::VarHandle> use_vars, mutate_vars;
@@ -290,13 +289,7 @@ void GraphExecutorV2::Run(const vector<NDArray>& arguments,
   }
   // Prepare results.
   CHECK_NOTNULL(results);
-  if (results->empty()) {
-    // Result array is not provided. Fetch the output arrays
-    // of the graph as the result array.
-    for (size_t i = 0; i < graph_.outputs.size(); ++i) {
-      results->push_back(FetchRstArray(i));
-    }
-  } else {
+  if (!results->empty()) {
     // Result storage is provided. Feed the result array
     // as the output of the related operator.
     CHECK_EQ(results->size(), graph_.outputs.size());
@@ -304,6 +297,7 @@ void GraphExecutorV2::Run(const vector<NDArray>& arguments,
       FeedRstArray((*results)[i], i, &touched);
     }
   }
+
   // Recreate engine operator for all touched nodes because
   // their read/write vars are changed.
   const auto& op_execs = graph_.node_attrs.GetColumn<shared_ptr<OpExecutor>>(
@@ -350,6 +344,17 @@ void GraphExecutorV2::Run(const vector<NDArray>& arguments,
     //if (monitor_callback_) {
       //ExecuteMonCallback(nid);
     //}
+  }
+
+  if (results->empty()) {
+    // Result array is not provided. Fetch the output arrays
+    // of the graph as the result array.
+    for (size_t i = 0; i < graph_.outputs.size(); ++i) {
+      LOG(INFO) << "Fetch rst#" << i << " name="
+        << graph_.outputs[i].node->attrs.name << "_output"
+        << graph_.outputs[i].index;
+      results->push_back(FetchRstArray(i));
+    }
   }
 }
 

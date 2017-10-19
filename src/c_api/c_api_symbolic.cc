@@ -787,7 +787,9 @@ int MXGraphEval(GraphHandle graph,
       results.push_back(*rsts_ptr[i]);
     }
   }
-  executor.Run(arguments, &results);
+  GraphExecutorV2::RunOption opt;
+  opt.is_train = true;
+  executor.Run(arguments, &results, opt);
   if (rsts_ptr == nullptr) {
     *num_outputs = results.size();
     // TODO(minjie): num visible outputs
