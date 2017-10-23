@@ -755,7 +755,8 @@ int MXGraphEval(GraphHandle graph,
                 int num_inputs,
                 NDArrayHandle *inputs,
                 int *num_outputs,
-                NDArrayHandle **outputs) {
+                NDArrayHandle **outputs,
+                int is_training) {
   using nnvm::GraphPtr;
   using nnvm::any;
   using exec::GraphExecutorV2;
@@ -770,6 +771,7 @@ int MXGraphEval(GraphHandle graph,
   kwargs_any["context"] = std::make_shared<any>(std::move(ctx));
   nnvm::Specialize(pg.get(), kwargs_any);
 
+  // TODO(minjie): how to expose to python?
   GraphExecutorV2::Config cfg;
   cfg.zero_copy = true;
   GraphExecutorV2 executor(*pg, cfg);
@@ -787,8 +789,9 @@ int MXGraphEval(GraphHandle graph,
       results.push_back(*rsts_ptr[i]);
     }
   }
+  // TODO(minjie): how to expose to python?
   GraphExecutorV2::RunOption opt;
-  opt.is_train = true;
+  opt.is_train = (is_training == 1);
   executor.Run(arguments, &results, opt);
   if (rsts_ptr == nullptr) {
     *num_outputs = results.size();

@@ -305,7 +305,6 @@ void ThreadedEngine::DeleteVariable(SyncFn delete_fn,
   this->PushSync([delete_fn, threaded_var](RunContext ctx) {
       // Mark variable as orphan,
       // so during `ThreadedEngine::OnComplete` it could be recycled.
-      LOG(INFO) << "Delete var: " << threaded_var;
       threaded_var->SetToDelete();
       delete_fn(ctx);
     }, exec_ctx, {}, {var}, FnProperty::kAsync, 0,

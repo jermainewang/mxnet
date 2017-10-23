@@ -147,7 +147,7 @@ class Graph(object):
             return [NDArray(ctypes.cast(array_hdls[i], NDArrayHandle))
                     for i in range(num_outputs.value)]
 
-    def eval(self, inputs):
+    def eval(self, inputs, is_training=False):
         output_handles = ctypes.POINTER(NDArrayHandle)()
         num_outputs = ctypes.c_int(0)
         check_call(_LIB.MXGraphEval(
@@ -155,7 +155,8 @@ class Graph(object):
             ctypes.c_int(len(inputs)),
             c_array(NDArrayHandle, [arr.handle for arr in inputs]),
             ctypes.byref(num_outputs),
-            ctypes.byref(output_handles)))
+            ctypes.byref(output_handles),
+            ctypes.c_int(int(is_training))))
         if num_outputs.value == 1:
             return NDArray(ctypes.cast(output_handles[0], NDArrayHandle))
         else:

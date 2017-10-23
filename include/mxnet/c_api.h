@@ -1659,7 +1659,8 @@ MXNET_DLL int MXGraphEval(GraphHandle graph,
                           int num_inputs,
                           NDArrayHandle *inputs,
                           int *num_outputs,
-                          NDArrayHandle **outputs);
+                          NDArrayHandle **outputs,
+                          int is_training);
 /////////////// Subgraph APIs
 
 

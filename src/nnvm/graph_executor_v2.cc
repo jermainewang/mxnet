@@ -18,7 +18,7 @@ using StorageRef = pass::plan_memory::StorageRef;
 // engine operators.
 struct OpNode {
   // The name of the operator
-  const char* opr_name = "";
+  std::string opr_name;
   // the context of the node
   Context ctx;
   // The executor
@@ -104,7 +104,7 @@ void SetupOpResourcesRec(const Graph& graph,
   }
 }
 
-void CreateOpNode(const Graph& graph,
+void SetupClosure(const Graph& graph,
                   uint32_t nid,
                   const Column<TShape>* shapes,
                   const Column<int>* dtypes,
@@ -130,55 +130,58 @@ void CreateOpNode(const Graph& graph,
       opnode->in_array[i] = data_pool[storageid].AsArray(
           shapes->value[eid], dtypes->value[eid]);
     } else if (storageid == kExternalStorageID) {
-      CHECK_EQ(expect.ctx(), provided.ctx())
-        << "Context mismatch: expect " << expect.ctx()
-        << " provided " << provided.ctx();
-      CHECK_EQ(expect.shape(), provided.shape())
-        << "Shape mismatch: expect " << expect.shape()
-        << " provided " << provided.shape();
-      CHECK_EQ(expect.dtype(), provided.dtype())
-        << "DType mismatch: expect " << expect.dtype()
-        << " provided " << provided.dtype();
+      CHECK(!opnode->in_array[i].is_none());
+      const auto& array = opnode->in_array[i];
+      CHECK_EQ(shapes->value[eid], array.shape())
+        << "Shape mismatch: expect " << shapes->value[eid]
+        << " provided " << array.shape();
+      CHECK_EQ(dtypes->value[eid], array.dtype())
+        << "DType mismatch: expect " << dtypes->value[eid]
+        << " provided " << array.dtype();
+    } else {
+      LOG(FATAL) << "Cannot create ndarray for entry#" << eid
+        << " with provided shape=" << shapes->value[eid]
+        << " & dtype=" << dtypes->value[eid];
     }
   }
   // Output arrays.
   for (uint32_t i = 0; i < node->num_outputs(); ++i) {
     const uint32_t eid = idx.entry_id(nid, i);
-    const StorageRef& store_ref = mem_plan->value[eid];
     const int storageid = mem_plan->value[eid].storage_id;
     if (storageid >= 0) {
       opnode->out_array[i] = data_pool[storageid].AsArray(
           shapes->value[eid], dtypes->value[eid]);
     } else if (storageid == kExternalStorageID) {
-      // TODO: shape/dtype check.
-    }
-    // Output request.
-    if (false) {
-      // TODO(minjie): addto inplace optimization.
-    } else if (store_ref.inplace_index >= 0) {
-      exec->req.push_back(kWriteInplace);
+      CHECK(!opnode->out_array[i].is_none());
+      const auto& array = opnode->out_array[i];
+      CHECK_EQ(shapes->value[eid], array.shape())
+        << "Shape mismatch: expect " << shapes->value[eid]
+        << " provided " << array.shape();
+      CHECK_EQ(dtypes->value[eid], array.dtype())
+        << "DType mismatch: expect " << dtypes->value[eid]
+        << " provided " << array.dtype();
     } else if (storageid == kNull) {
-      // TODO(minjie): need double-check.
-      exec->req.push_back(kNullOp);
+      // TODO(minjie): Context for null output?
+      opnode->out_array[i] = NDArray(shapes->value[eid],
+          opnode->ctx, true, dtypes->value[eid]);
     } else {
-      exec->req.push_back(kWriteTo);
+      LOG(FATAL) << "Cannot create ndarray for entry#" << eid
+        << " with provided shape=" << shapes->value[eid]
+        << " & dtype=" << dtypes->value[eid];
     }
   }
 
-  // Create op node.
-  const bool is_async = exec->exec_type() == Operator::kAsync;
-  const bool is_gpu = ctx.dev_mask() == gpu::kDevMask;
-
   // Execution functor.
-  // TODO(minjie): need to double-check this lambda closure
-  // if the executor is asynchronous.
-  auto exec_fun = [opnode, is_async, is_gpu] (
+  const OpNode& capture = *opnode;
+  auto exec_fun = [capture] (
       RunContext ctx, Engine::CallbackOnComplete on_complete) {
-    auto exec = opnode->exec;
+    auto exec = capture.exec;
+    const bool is_async = exec->exec_type() == Operator::kAsync;
+    const bool is_gpu = capture.ctx.dev_mask() == gpu::kDevMask;
     if (is_async) {
       exec->op_ctx.async_on_complete = on_complete;
     }
-    exec->Setup(opnode->in_array, opnode->out_array);
+    exec->Setup(capture.in_array, capture.out_array);
     exec->Run(ctx);
     // call on complete only if it is async op
     if (!is_async) {
@@ -195,15 +198,28 @@ void CreateOpNode(const Graph& graph,
   };
   // Setup variables
   std::vector<Engine::VarHandle> use_vars, mutate_vars;
-  for (size_t i = 0; i < in_array.size(); ++i) {
-    use_vars.push_back(in_array[i].var());
+  for (size_t i = 0; i < opnode->in_array.size(); ++i) {
+    use_vars.push_back(opnode->in_array[i].var());
   }
   for (auto& r : exec->op_ctx.requested) {
     mutate_vars.push_back(r.var);
   }
-  for (size_t i = 0; i < out_array.size(); ++i) {
-    mutate_vars.push_back(out_array[i].var());
+  for (size_t i = 0; i < opnode->out_array.size(); ++i) {
+    if (!opnode->out_array[i].is_none()) {
+      mutate_vars.push_back(opnode->out_array[i].var());
+    }
   }
+  /*ostringstream oss;
+  oss << "Read: [";
+  for (const auto& v : use_vars) {
+    oss << v << " ";
+  }
+  oss << "] Write: [";
+  for (const auto& v : mutate_vars) {
+    oss << v << " ";
+  }
+  oss << "]";
+  LOG(INFO) << oss.str();*/
   // Remove dupliated vars.
   Engine::Get()->DeduplicateVarHandle(&use_vars, &mutate_vars);
   // Save everything.
@@ -213,24 +229,24 @@ void CreateOpNode(const Graph& graph,
   opnode->dirty = false;
 }
 
-void InitOpNodeRec(const Graph& graph,
-                   const Column<shared_ptr<OpExecutor>>* op_execs,
-                   const Column<int>* vdevice,
-                   Column<OpNode>* op_nodes) {
+void InitOpClosureRec(const Graph& graph,
+                      const Column<shared_ptr<OpExecutor>>* op_execs,
+                      const Column<int>* vdevice,
+                      const Column<StorageRef>* mem_plan,
+                      Column<OpNode>* op_nodes) {
+  using pass::plan_memory::kExternalStorageID;
+  using pass::plan_memory::kNull;
+
   const auto& idx = graph.indexed_graph();
   const auto& context = graph.GetGlobalAttr<vector<Context>>(pass::ctx::ctx_key);
   // setup the array and requirements.
   for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
-    OpNode& opnode = opnodes->value[nid];
+    OpNode& opnode = op_nodes->value[nid];
     const Node* node = idx[nid].source;
     if (node->is_variable()) {
       continue;
     }
-#if MXNET_USE_PROFILER
-    opnode.opr_name = node->op()->name.c_str();
-#else
-    opnode.opr_name = nullptr;
-#endif
+    opnode.opr_name = node->op()->name;
     if (node->is_graph()) {
       // TODO
     } else {
@@ -238,6 +254,23 @@ void InitOpNodeRec(const Graph& graph,
       opnode.out_array.resize(node->num_outputs());
       opnode.exec = op_execs->value[nid];
       opnode.ctx = context.at(vdevice->value[nid]);
+      // TODO(minjie): move below to attach op exec pass.
+      for (size_t i = 0; i < node->num_outputs(); ++i) {
+        const uint32_t eid = idx.entry_id(nid, i);
+        const StorageRef& store_ref = mem_plan->value[eid];
+        const int storageid = mem_plan->value[eid].storage_id;
+        // Output request.
+        if (false) {
+          // TODO(minjie): addto inplace optimization.
+        } else if (store_ref.inplace_index >= 0) {
+          opnode.exec->req.push_back(kWriteInplace);
+        } else if (storageid == kNull) {
+          // TODO(minjie): need double-check.
+          opnode.exec->req.push_back(kNullOp);
+        } else {
+          opnode.exec->req.push_back(kWriteTo);
+        }
+      }
     }
   }
 }
@@ -249,6 +282,9 @@ GraphExecutorV2::GraphExecutorV2(const Graph& graph,
    required_graph_attrs_(_InitRequiredGraphAttrs()) {
   _CheckAllAttrsExist(graph_, required_graph_attrs_);
   SetupResources();
+}
+
+GraphExecutorV2::~GraphExecutorV2() {
 }
 
 void GraphExecutorV2::Run(const vector<NDArray>& arguments,
@@ -263,7 +299,10 @@ void GraphExecutorV2::Run(const vector<NDArray>& arguments,
   const auto* dtypes = graph_.entry_attrs.GetColumn<int>(pass::dtype::key).get();
   const auto* mem_plan = graph_.entry_attrs.GetColumn<StorageRef>(pass::plan_memory::ref_key).get();
 
+  LOG(INFO) << "Graph execution starts.";
+
   // Feed arguments.
+  LOG(INFO) << "Feeding argument ndarrays.";
   CHECK_EQ(arguments.size(), idx.input_nodes().size());
   for (size_t i = 0; i < arguments.size(); ++i) {
     FeedArgArray(arguments[i], i);
@@ -271,6 +310,7 @@ void GraphExecutorV2::Run(const vector<NDArray>& arguments,
   // Feed results.
   CHECK_NOTNULL(results);
   if (!results->empty()) {
+    LOG(INFO) << "Feeding result ndarrays.";
     // Result storage is provided. Feed the result array
     // as the output of the related operator.
     CHECK_EQ(results->size(), graph_.outputs.size());
@@ -281,26 +321,33 @@ void GraphExecutorV2::Run(const vector<NDArray>& arguments,
 
   // Check all operator closures and re-make those dirty ones.
   for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
-    OpNode& opnode = op_nodes_.CopyOnWrite()->value[nid];
-    opnode.exec->op_ctx.is_train = option.is_train;
-    if (opnode.dirty) {
-      // Create operator closure for dirty op.
-      LOG(INFO) << "Create OpNode for node#" << nid << ": " << node->attrs.name;
-      const auto& op_exec = op_execs->value[nid];
-      const Context& ctx = context.at(device->value[nid]);
-      CreateOpNode(graph_, nid, op_exec, ctx,
-                   shapes, dtypes, mem_plan, data_entries_,
-                   &opnode);
+    const Node* node = idx[nid].source;
+    if (node->is_variable()) {
+      continue;
+    } else if (node->is_graph()) {
+      // TODO(minjie): subgraph node.
+    } else {
+      OpNode& opnode = op_nodes_.CopyOnWrite()->value[nid];
+      opnode.exec->op_ctx.is_train = option.is_train;
+      if (opnode.dirty) {
+        // Create operator closure for dirty op.
+        LOG(INFO) << "Setup closure for node#" << nid << ": " << node->attrs.name;
+        const auto& op_exec = op_execs->value[nid];
+        const Context& ctx = context.at(device->value[nid]);
+        SetupClosure(graph_, nid, shapes, dtypes, mem_plan, data_entries_,
+                     &opnode);
+      }
     }
   }
 
   if (results->empty()) {
+    LOG(INFO) << "Fetching result ndarrays.";
     // Result array is not provided. Fetch the output arrays
     // of the graph as the result array.
     for (size_t i = 0; i < graph_.outputs.size(); ++i) {
-      LOG(INFO) << "Fetch rst#" << i << " name="
-        << graph_.outputs[i].node->attrs.name << "_output"
-        << graph_.outputs[i].index;
+      //LOG(INFO) << "Fetch rst#" << i << " name="
+        //<< graph_.outputs[i].node->attrs.name << "_output"
+        //<< graph_.outputs[i].index;
       results->push_back(FetchRstArray(i));
     }
   }
@@ -318,13 +365,13 @@ void GraphExecutorV2::Run(const vector<NDArray>& arguments,
     } else if (node->is_graph()) {
       // TODO(minjie): subgraph node.
     } else {
-      const OpNode& opnode = op_nodes_->value[nid];
+      OpNode& opnode = op_nodes_.CopyOnWrite()->value[nid];
       if (opnode.skip_exec_node) continue;
       if (opnode.exec->exec_type() == Operator::kCrossDeviceCopy) {
         CHECK_EQ(node->inputs.size(), 1U);
-        CHECK_EQ(opnode.exec->NumInputs(), 1U);
-        CHECK_EQ(opnode.exec->NumOutputs(), 1U);
-        CopyFromTo(opnode.exec->GetInput(0), &(opnode.exec->GetOutput(0)));
+        CHECK_EQ(opnode.in_array.size(), 1U);
+        CHECK_EQ(opnode.out_array.size(), 1U);
+        CopyFromTo(opnode.in_array[0], &(opnode.out_array[0]));
       } else if (opnode.cached_opr != nullptr) {
 #if MXNET_USE_PROFILER
         bool profiling = engine::Profiler::Get()->GetState() == engine::Profiler::kRunning;
@@ -333,10 +380,6 @@ void GraphExecutorV2::Run(const vector<NDArray>& arguments,
 #endif
         LOG(INFO) << "Push Node#" << nid << " " << node->attrs.name;
         Engine::Get()->Push(opnode.cached_opr, opnode.ctx, 0, profiling);
-        if (config_.dynamic_allocation) {
-          // Delete cached opr.
-          Engine::Get()->DeleteOperator(opnode->cached_opr);
-        }
       } else {
         LOG(FATAL) << "Cannot execute Node#" << nid << " " << node->attrs.name;
       }
@@ -350,26 +393,15 @@ void GraphExecutorV2::Run(const vector<NDArray>& arguments,
     //}
   }
 }
-
+  
 void GraphExecutorV2::FeedArgArray(const NDArray& array, size_t i) {
-  const auto& col_op_execs = graph_.node_attrs.GetColumn<shared_ptr<OpExecutor>>(
-      pass::attach_op::key);
+  const auto* shapes = graph_.entry_attrs.GetColumn<TShape>(pass::shape::key).get();
+  const auto* dtypes = graph_.entry_attrs.GetColumn<int>(pass::dtype::key).get();
   const auto& idx = graph_.indexed_graph();
   for (const OpInputEntry& ent : arg_to_op_input_[i]) {
     const uint32_t nid = ent.first;
     const size_t i = ent.second;
-    const auto& op_exec = col_op_execs->value[nid];
-    const auto& op_inarr = op_exec->GetInput(i);
-    CHECK_EQ(op_inarr.ctx(), array.ctx())
-      << "Context mismatch: expect " << op_inarr.ctx()
-      << " provided " << array.ctx();
-    CHECK_EQ(op_inarr.shape(), array.shape())
-      << "Shape mismatch: expect " << op_inarr.shape()
-      << " provided " << array.shape();
-    CHECK_EQ(op_inarr.dtype(), array.dtype())
-      << "DType mismatch: expect " << op_inarr.dtype()
-      << " provided " << array.dtype();
-    op_exec->SetInput(array, i);
+    op_nodes_.CopyOnWrite()->value[nid].in_array[i] = array;
     op_nodes_.CopyOnWrite()->value[nid].dirty = true;
   }
 }
@@ -380,18 +412,7 @@ void GraphExecutorV2::FeedRstArray(const NDArray& array, size_t i) {
       pass::attach_op::key);
   const NodeEntry& outent = graph_.outputs[i];
   const uint32_t nid = idx.node_id(outent.node.get());
-  const auto& op_exec = op_execs->value[nid];
-  const auto& op_outarr = op_exec->GetOutput(outent.index);
-  CHECK_EQ(op_outarr.ctx(), array.ctx())
-    << "Context mismatch: expect " << op_outarr.ctx()
-    << " provided " << array.ctx();
-  CHECK_EQ(op_outarr.shape(), array.shape())
-    << "Shape mismatch: expect " << op_outarr.shape()
-    << " provided " << array.shape();
-  CHECK_EQ(op_outarr.dtype(), array.dtype())
-    << "DType mismatch: expect " << op_outarr.dtype()
-    << " provided " << array.dtype();
-  op_exec->SetOutput(array, outent.index);
+  op_nodes_.CopyOnWrite()->value[nid].out_array[outent.index] = array;
   op_nodes_.CopyOnWrite()->value[nid].dirty = true;
 }
 
@@ -399,9 +420,7 @@ const NDArray& GraphExecutorV2::FetchRstArray(size_t i) {
   const auto& idx = graph_.indexed_graph();
   const NodeEntry& outent = graph_.outputs[i];
   const uint32_t nid = idx.node_id(outent.node.get());
-  const auto& op_exec = op_nodes_->value[nid].exec;
-  LOG(INFO) << "Output var: " << op_exec->GetOutput(outent.index).var();
-  return op_exec->GetOutput(outent.index);
+  return op_nodes_->value[nid].out_array[outent.index];
 }
 
 void GraphExecutorV2::SetupResources() {
@@ -409,11 +428,6 @@ void GraphExecutorV2::SetupResources() {
   SetupDataEntries();
   LOG(INFO) << "Pre-allocating all operator resources.";
   SetupOpResources();
-}
-
-void GraphExecutorV2::ReleaseResources() {
-  ReleaseDataEntries();
-  ReleaseOpResources();
 }
 
 const vector<string>& GraphExecutorV2::RequiredGraphAttrs() const {
@@ -432,7 +446,7 @@ void GraphExecutorV2::SetupOpResources() {
   const auto* mem_plan = graph_.entry_attrs.GetColumn<StorageRef>(pass::plan_memory::ref_key).get();
   SetupOpResourcesRec(graph_, op_execs, device, &cached_temp);
   op_nodes_ = graph_.CreateNodeColumn<OpNode>();
-  InitOpNodeRec(graph_, op_execs, device, op_nodes_.CopyOnWrite());
+  InitOpClosureRec(graph_, op_execs, device, mem_plan, op_nodes_.CopyOnWrite());
   // Save mapping from arguments to operator inputs.
   const auto& idx = graph_.indexed_graph();
   const auto& input_nids = idx.input_nodes();
@@ -455,6 +469,7 @@ void GraphExecutorV2::SetupOpResources() {
 }
 
 void GraphExecutorV2::ResetDataEntries() {
+  LOG(INFO) << "Reset all data entries to allow dynamic allocation.";
   for (size_t i = 0; i < data_entries_.size(); ++i) {
     const NDArray& old = data_entries_[i];
     data_entries_[i] = NDArray(old.shape(), old.ctx(), true, old.dtype());
@@ -483,23 +498,19 @@ void GraphExecutorV2::SetupDataEntries() {
               << " size=" << nword << " floats.";
     data_entries_.push_back(NDArray(shape, context.at(st.device_id), delay_alloc));
   }
-  values_ = graph_.CreateEntryColumn<NDArray>();
-  CreateValuesRec(graph_, shapes, dtypes, mem_plan,
-                  data_entries_, values_.CopyOnWrite());
 }
 
-void GraphExecutorV2::ReleaseOpResources() {
+void GraphExecutorV2::ResetOpNode(uint32_t nid) {
   const auto& idx = graph_.indexed_graph();
-  for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
-    op_nodes_.CopyOnWrite()->value[nid].dirty = true;
-  }
-}
-
-void GraphExecutorV2::ReleaseDataEntries() {
-  data_entries_[0].Realloc();
-  //for (auto& entry : data_entries_) {
-    //entry.Reset();
-  //}
+  const Node* node = idx[nid].source;
+  OpNode& opnode = op_nodes_.CopyOnWrite()->value[nid];
+  opnode.in_array.clear();
+  opnode.in_array.resize(node->inputs.size());
+  opnode.out_array.clear();
+  opnode.out_array.resize(node->num_outputs());
+  opnode.dirty = true;
+  Engine::Get()->DeleteOperator(opnode.cached_opr);
+  opnode.cached_opr = nullptr;
 }
 
 }  // namespace exec

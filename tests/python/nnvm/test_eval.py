@@ -90,7 +90,7 @@ def _test_eval_helper(net, g, data_shape):
                         args_grad=None,
                         grad_req='write',
                         aux_states=aux_arrays)
-    legacy_results = executor.forward(is_train=True)
+    legacy_results = executor.forward(is_train=False)
     # Use new eval API.
     shape_args = {'shape_inputs' : [data_shape]}
     dtype_args = {'dtype_inputs' : [0]}
@@ -103,7 +103,7 @@ def _test_eval_helper(net, g, data_shape):
     in_arrays = _pack_in_arrays(arg_arrays, net.list_arguments(),
                                 aux_arrays, net.list_auxiliary_states(),
                                 net.list_inputs())
-    new_results = g.eval(in_arrays)
+    new_results = g.eval(in_arrays, is_training=False)
     if not isinstance(new_results, list):
         new_results = [new_results]
     assert len(legacy_results) == len(new_results)
@@ -150,7 +150,7 @@ def _test_grad_eval_helper(net, g, data_shape):
                                      aux_arrays, net.list_auxiliary_states(),
                                      head_grad_arrays, net.list_outputs(),
                                      net.list_inputs())
-    new_grad_arrays = g.eval(in_arrays)
+    new_grad_arrays = g.eval(in_arrays, is_training=True)
     if not isinstance(new_grad_arrays, list):
         new_grad_arrays = [new_grad_arrays]
     assert len(legacy_grad_arrays) == len(new_grad_arrays)
@@ -165,4 +165,4 @@ def test_simple_grad_eval():
     
 if __name__ == '__main__':
     test_simple_eval()
-    #test_simple_grad_eval()
+    test_simple_grad_eval()

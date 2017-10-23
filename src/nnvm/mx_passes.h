@@ -206,11 +206,17 @@ class OpExecutor {
              const std::vector<NDArray>& out_array) {
     // Note that the "data()" call here will allocate
     // all memory chunks.
+    CHECK_EQ(in_array.size(), in_tblob_ptr_.size());
+    CHECK_EQ(out_array.size(), out_tblob_ptr_.size());
     for (size_t i = 0; i < in_array.size(); ++i) {
-      *in_tblob_ptr_[i] = in_array[i].data();
+      if (!in_array[i].is_none()) {
+        *in_tblob_ptr_[i] = in_array[i].data();
+      }
     }
     for (size_t i = 0; i < out_array.size(); ++i) {
-      *out_tblob_ptr_[i] = out_array[i].data();
+      if (!out_array[i].is_none()) {
+        *out_tblob_ptr_[i] = out_array[i].data();
+      }
     }
   }
   /*size_t NumInputs() const {

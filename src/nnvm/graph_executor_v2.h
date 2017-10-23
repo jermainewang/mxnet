@@ -33,6 +33,8 @@ class GraphExecutorV2 {
   GraphExecutorV2(const nnvm::Graph& graph,
                   const Config& config = Config());
 
+  ~GraphExecutorV2();
+
   void Run(const std::vector<NDArray>& arguments,
            std::vector<NDArray>* results,
            const RunOption& option = RunOption());
@@ -46,17 +48,12 @@ class GraphExecutorV2 {
 
   void SetupDataEntries();
 
-  void ReleaseResources();
-
-  void ReleaseOpResources();
-
-  void ReleaseDataEntries();
-
   void FeedArgArray(const NDArray& array, size_t i);
   void FeedRstArray(const NDArray& array, size_t i);
   const NDArray& FetchRstArray(size_t i);
 
   void ResetDataEntries();
+  void ResetOpNode(uint32_t nid);
 
  private:
   // The graph to be evaluated.
