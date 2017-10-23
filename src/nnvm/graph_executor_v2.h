@@ -21,7 +21,7 @@ struct OpNode;
 class GraphExecutorV2 {
  public:
   struct Config {
-    bool dynamic_allocation{false};
+    bool dynamic_allocation{true};
     bool zero_copy{false};
     Config() {}
   };
@@ -40,23 +40,23 @@ class GraphExecutorV2 {
   const std::vector<std::string>& RequiredGraphAttrs() const;
 
  private:
-  void AllocateResources();
+  void SetupResources();
+
+  void SetupOpResources();
+
+  void SetupDataEntries();
 
   void ReleaseResources();
-
-  void AllocateOpResources(const std::vector<NDArray>& data_entries);
-
-  void AllocateDataEntries(std::vector<NDArray>* data_entries);
 
   void ReleaseOpResources();
 
   void ReleaseDataEntries();
 
-  void FeedArgArray(const NDArray& array, size_t i,
-                    std::unordered_set<uint32_t>* touched_nodes);
-  void FeedRstArray(const NDArray& array, size_t i,
-                    std::unordered_set<uint32_t>* touched_nodes);
+  void FeedArgArray(const NDArray& array, size_t i);
+  void FeedRstArray(const NDArray& array, size_t i);
   const NDArray& FetchRstArray(size_t i);
+
+  void ResetDataEntries();
 
  private:
   // The graph to be evaluated.
@@ -64,6 +64,9 @@ class GraphExecutorV2 {
   const Config config_;
   // Attributes required for graph evaluation.
   const std::vector<std::string> required_graph_attrs_;
+
+  // Data entries.
+  std::vector<NDArray> data_entries_;
   // Operator nodes.
   nnvm::ColumnRef<OpNode> op_nodes_;
   // Data structure used to feed argument to the operator.

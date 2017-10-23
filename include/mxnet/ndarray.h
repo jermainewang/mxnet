@@ -309,10 +309,17 @@ class NDArray {
   }
   /*!
    * \brief Allocate the space if it is delayed allocated.
-   * This is an internal function used by system that normal user should not use
+   * This is an internal function used by system that normal user should not use.
    */
   inline void CheckAndAlloc() const {
     ptr_->CheckAndAlloc();
+  }
+  /*!
+   * \brief Free the space and allocate a new one.
+   * This is an internal function used by system that normal user should not use.
+   */
+  inline void Realloc() const {
+    ptr_->Realloc();
   }
   /*!
    * \brief Save list of ndarray into the Stream.x
@@ -379,6 +386,20 @@ class NDArray {
       if (delay_alloc) {
         shandle = Storage::Get()->Alloc(shandle.size, shandle.ctx);
         delay_alloc = false;
+      }
+    }
+    /*! \brief Free this chunk (and its variable) and allocate a new one. */
+    inline void Realloc(void) {
+      if (static_data || delay_alloc) {
+        Engine::Get()->DeleteVariable([this](RunContext s) {
+            this->var = Engine::Get()->NewVariable();
+          }, shandle.ctx, var);
+      } else {
+        Engine::Get()->DeleteVariable([this](RunContext s) {
+            this->var = Engine::Get()->NewVariable();
+            Storage::Get()->Free(this->shandle);
+            this->delay_alloc = true;
+          }, shandle.ctx, var);
       }
     }
     /*! \brief destructor */

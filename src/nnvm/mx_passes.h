@@ -202,47 +202,23 @@ class OpExecutor {
    * this can be called multiple times if NDArray changed during reshape.
    *  It is safe to call it via asynchronize engine lambda
    */
-  void Setup() {
-    if (dirty_) {
-      // Note that the "data()" call here will allocate
-      // all memory chunks.
-      for (size_t i = 0; i < in_array_.size(); ++i) {
-        *in_tblob_ptr_[i] = in_array_[i].data();
-      }
-      for (size_t i = 0; i < out_array_.size(); ++i) {
-        *out_tblob_ptr_[i] = out_array_[i].data();
-      }
-      dirty_ = false;
+  void Setup(const std::vector<NDArray>& in_array,
+             const std::vector<NDArray>& out_array) {
+    // Note that the "data()" call here will allocate
+    // all memory chunks.
+    for (size_t i = 0; i < in_array.size(); ++i) {
+      *in_tblob_ptr_[i] = in_array[i].data();
+    }
+    for (size_t i = 0; i < out_array.size(); ++i) {
+      *out_tblob_ptr_[i] = out_array[i].data();
     }
   }
-  void SetInput(const NDArray& nd, size_t idx) {
-    CHECK_LT(idx, in_array_.size());
-    in_array_[idx] = nd;
-    dirty_ = true;
-  }
-  void SetOutput(const NDArray& nd, size_t idx) {
-    CHECK_LT(idx, out_array_.size());
-    out_array_[idx] = nd;
-    dirty_ = true;
-  }
-  const NDArray& GetInput(size_t idx) const {
-    return in_array_[idx];
-  }
-  const NDArray& GetOutput(size_t idx) const {
-    return out_array_[idx];
-  }
-  NDArray& GetInput(size_t idx) {
-    return in_array_[idx];
-  }
-  NDArray& GetOutput(size_t idx) {
-    return out_array_[idx];
-  }
-  size_t NumInputs() const {
+  /*size_t NumInputs() const {
     return in_array_.size();
   }
   size_t NumOutputs() const {
     return out_array_.size();
-  }
+  }*/
   /*!
    * \brief run the operator given runtime context on device.
    *  This function call do not synchronize the stream.
@@ -254,22 +230,12 @@ class OpExecutor {
  
  protected:
   void Reset(size_t num_inputs, size_t num_outputs) {
-    in_array_.clear();
-    out_array_.clear();
     in_tblob_ptr_.clear();
     out_tblob_ptr_.clear();
-    in_array_.resize(num_inputs);
     in_tblob_ptr_.resize(num_inputs, nullptr);
-    out_array_.resize(num_outputs);
     out_tblob_ptr_.resize(num_outputs, nullptr);
-    dirty_ = true;
   }
 
-  // If true, the NDArray inputs/outputs have been changed
-  // so TBlob pointers need to be reset.
-  bool dirty_{true};
-  /*! \brief Input and output arrays. */
-  std::vector<NDArray> in_array_, out_array_;
   /*! \brief Input and output tblob pointers. */
   std::vector<TBlob*> in_tblob_ptr_, out_tblob_ptr_;
 };

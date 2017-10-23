@@ -74,7 +74,7 @@ def _pack_grad_in_arrays(arg_arrays, arg_names, aux_arrays, aux_names,
     return in_arrays
 
 
-def test_eval_helper(net, g, data_shape):
+def _test_eval_helper(net, g, data_shape):
     assert 'data' in net.list_inputs()
     # Create legacy executor.
     in_shapes = {'data': tuple(data_shape)}
@@ -110,7 +110,7 @@ def test_eval_helper(net, g, data_shape):
     assert all([np.allclose(r1.asnumpy(), r2.asnumpy())
                 for r1, r2 in zip(legacy_results, new_results)])
 
-def test_grad_eval_helper(net, g, data_shape):
+def _test_grad_eval_helper(net, g, data_shape):
     assert 'data' in net.list_inputs()
     # Create legacy executor.
     in_shapes = {'data': tuple(data_shape)}
@@ -158,11 +158,11 @@ def test_grad_eval_helper(net, g, data_shape):
                 for r1, r2 in zip(legacy_grad_arrays, new_grad_arrays)])
 
 def test_simple_eval():
-    test_eval_helper(_conv_block_sym(), _conv_block(), [16, 8, 10, 10])
+    _test_eval_helper(_conv_block_sym(), _conv_block(), [16, 8, 10, 10])
 
-def test_grad_eval():
-    test_grad_eval_helper(_conv_block_sym(), _conv_block_with_grad(mode=kFullGraph), [16, 8, 10, 10])
+def test_simple_grad_eval():
+    _test_grad_eval_helper(_conv_block_sym(), _conv_block_with_grad(mode=kFullGraph), [16, 8, 10, 10])
     
 if __name__ == '__main__':
     test_simple_eval()
-    test_grad_eval()
+    #test_simple_grad_eval()
