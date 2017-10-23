@@ -612,7 +612,7 @@ size_t PlanMemoryRec(const Graph& graph,
     }
   }
   oss << "]";
-  LOG(INFO) << oss.str();
+  DLOG(INFO) << oss.str();
   }
   return num_not_allocated;
 }

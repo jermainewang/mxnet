@@ -82,7 +82,7 @@ class InferAttrPass {
 
     // TODO(minjie): Only one pass right now. Need multiple passes.
     for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
-      LOG(INFO) << "Infer node#" << nid << idx[nid].source->attrs.name;
+      DLOG(INFO) << "Infer node#" << nid << idx[nid].source->attrs.name;
       InferOneNode(graph, nid, attr_col, fwd_attr_col);
     }
 
@@ -221,7 +221,7 @@ class InferAttrPass {
           sub_fwd_attr_col = attr->children[fwd_nid].get();
         }
       }
-      LOG(INFO) << ">>>>Infer subgraph node: " << node->attrs.name;
+      DLOG(INFO) << ">>>>Infer subgraph node: " << node->attrs.name;
       this->Infer(sg.get(), subattr, sub_fwd_attr_col);
       
     }
@@ -356,7 +356,7 @@ class InferAttrPass {
       // 1. The first control dependency is point to the forward node.
       // 2. The name encodes which output this variable node represent
       //    for.
-      LOG(INFO) << "Found head grad node: " << node->attrs.name;
+      DLOG(INFO) << "Found head grad node: " << node->attrs.name;
       const uint32_t fwd_nid = idx.node_id(node->control_deps[0].get());
       const string& namestr = node->attrs.name;
       size_t pos_st = namestr.find_last_of("output") + 6;
