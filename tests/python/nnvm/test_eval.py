@@ -11,6 +11,7 @@ kFullGraph = 2
 kFullGraphWithOutput = 3
 
 rng = np.random.RandomState(seed=32)
+ctx = mx.gpu(0)
 
 def _conv_block_sym():
     net = sym.Variable('data')
@@ -38,6 +39,11 @@ def _conv_block_with_grad(mode=kOnlyForward):
         g = g.transform(["MXGradient"], mx_gradient_args=args)
     else:
         g = g.transform(["MXGradientOnlyBackward"], mx_gradient_args=args)
+    #s = graph.symbolize(g)
+    #n = s(data=mx.sym.Variable('data'))
+    #print(g.name)
+    #print(n.list_inputs())
+    #print(n.list_outputs())
     return g
 
 def _pack_in_arrays(arg_arrays, arg_names, aux_arrays, aux_names, input_names):
@@ -83,9 +89,9 @@ def _test_eval_helper(net, g, data_shape):
     arg_dtypes, out_dtypes, aux_dtypes = net.infer_type(**in_types)
     np_arg_arrays = [rng.uniform(-0.1, 0.1, shape).astype(np.float32) for shape in arg_shapes]
     np_aux_states = [np.zeros(shape).astype(np.float32) for shape in aux_shapes]
-    arg_arrays = [mx.nd.array(nparr, ctx=mx.cpu()) for nparr in np_arg_arrays]
-    aux_arrays = [mx.nd.array(nparr, ctx=mx.cpu()) for nparr in np_aux_states]
-    executor = net.bind(ctx=mx.cpu(),
+    arg_arrays = [mx.nd.array(nparr, ctx=ctx) for nparr in np_arg_arrays]
+    aux_arrays = [mx.nd.array(nparr, ctx=ctx) for nparr in np_aux_states]
+    executor = net.bind(ctx=ctx,
                         args=arg_arrays,
                         args_grad=None,
                         grad_req='write',
@@ -98,8 +104,8 @@ def _test_eval_helper(net, g, data_shape):
                  mx_infer_dtype_args=dtype_args,
                  graph_frozen=1)
     # Reset all inputs.
-    arg_arrays = [mx.nd.array(nparr, ctx=mx.cpu()) for nparr in np_arg_arrays]
-    aux_arrays = [mx.nd.array(nparr, ctx=mx.cpu()) for nparr in np_aux_states]
+    arg_arrays = [mx.nd.array(nparr, ctx=ctx) for nparr in np_arg_arrays]
+    aux_arrays = [mx.nd.array(nparr, ctx=ctx) for nparr in np_aux_states]
     in_arrays = _pack_in_arrays(arg_arrays, net.list_arguments(),
                                 aux_arrays, net.list_auxiliary_states(),
                                 net.list_inputs())
@@ -107,7 +113,7 @@ def _test_eval_helper(net, g, data_shape):
     if not isinstance(new_results, list):
         new_results = [new_results]
     assert len(legacy_results) == len(new_results)
-    assert all([np.allclose(r1.asnumpy(), r2.asnumpy())
+    assert all([np.allclose(r1.asnumpy(), r2.asnumpy(), rtol=1e-5, atol=1e-6)
                 for r1, r2 in zip(legacy_results, new_results)])
 
 def _test_grad_eval_helper(net, g, data_shape):
@@ -119,10 +125,10 @@ def _test_grad_eval_helper(net, g, data_shape):
     arg_dtypes, out_dtypes, aux_dtypes = net.infer_type(**in_types)
     np_arg_arrays = [rng.uniform(-0.1, 0.1, shape).astype(np.float32) for shape in arg_shapes]
     np_aux_states = [np.zeros(shape).astype(np.float32) for shape in aux_shapes]
-    arg_arrays = [mx.nd.array(nparr, ctx=mx.cpu()) for nparr in np_arg_arrays]
-    aux_arrays = [mx.nd.array(nparr, ctx=mx.cpu()) for nparr in np_aux_states]
-    legacy_grad_arrays = [mx.nd.zeros(arr.shape) for arr in arg_arrays]
-    executor = net.bind(ctx=mx.cpu(),
+    arg_arrays = [mx.nd.array(nparr, ctx=ctx) for nparr in np_arg_arrays]
+    aux_arrays = [mx.nd.array(nparr, ctx=ctx) for nparr in np_aux_states]
+    legacy_grad_arrays = [mx.nd.zeros(arr.shape, ctx=ctx) for arr in arg_arrays]
+    executor = net.bind(ctx=ctx,
                         args=arg_arrays,
                         args_grad=legacy_grad_arrays,
                         grad_req='write',
@@ -130,7 +136,7 @@ def _test_grad_eval_helper(net, g, data_shape):
     results = executor.forward(is_train=True)
     np_head_grad_arrays = [rng.uniform(-0.1, 0.1, shape).astype(np.float32)
                            for shape in out_shapes]
-    head_grad_arrays = [mx.nd.array(nparr, ctx=mx.cpu()) for nparr in np_head_grad_arrays]
+    head_grad_arrays = [mx.nd.array(nparr, ctx=ctx) for nparr in np_head_grad_arrays]
     executor.backward(head_grad_arrays)
     # Use new eval API.
     shape_args = {'shape_inputs' : [data_shape]}
@@ -138,14 +144,9 @@ def _test_grad_eval_helper(net, g, data_shape):
     g.specialize(mx_infer_shape_args=shape_args,
                  mx_infer_dtype_args=dtype_args,
                  graph_frozen=1)
-    #s = graph.symbolize(g)
-    #n = s(data=mx.sym.Variable('data'))
-    #print(g.name)
-    #print(n.list_inputs())
-    #print(n.list_outputs())
     # Reset all inputs.
-    arg_arrays = [mx.nd.array(nparr, ctx=mx.cpu()) for nparr in np_arg_arrays]
-    aux_arrays = [mx.nd.array(nparr, ctx=mx.cpu()) for nparr in np_aux_states]
+    arg_arrays = [mx.nd.array(nparr, ctx=ctx) for nparr in np_arg_arrays]
+    aux_arrays = [mx.nd.array(nparr, ctx=ctx) for nparr in np_aux_states]
     in_arrays = _pack_grad_in_arrays(arg_arrays, net.list_arguments(),
                                      aux_arrays, net.list_auxiliary_states(),
                                      head_grad_arrays, net.list_outputs(),
@@ -154,7 +155,7 @@ def _test_grad_eval_helper(net, g, data_shape):
     if not isinstance(new_grad_arrays, list):
         new_grad_arrays = [new_grad_arrays]
     assert len(legacy_grad_arrays) == len(new_grad_arrays)
-    assert all([np.allclose(r1.asnumpy(), r2.asnumpy())
+    assert all([np.allclose(r1.asnumpy(), r2.asnumpy(), rtol=1e-5, atol=1e-6)
                 for r1, r2 in zip(legacy_grad_arrays, new_grad_arrays)])
 
 def test_simple_eval():

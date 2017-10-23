@@ -767,7 +767,7 @@ int MXGraphEval(GraphHandle graph,
   const auto& idx = pg->indexed_graph();
   std::unordered_map<std::string, std::shared_ptr<any>> kwargs_any;
   // TODO(minjie): hard-code for testing.
-  std::vector<Context> ctx = {Context::CPU()};
+  std::vector<Context> ctx = {Context::GPU(0)};
   kwargs_any["context"] = std::make_shared<any>(std::move(ctx));
   nnvm::Specialize(pg.get(), kwargs_any);
 

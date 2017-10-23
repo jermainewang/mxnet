@@ -73,7 +73,7 @@ void SetupOpResourcesRec(const Graph& graph,
     if (node->is_variable()) {
       continue;
     }
-    LOG(INFO) << "Allocating operator resources for node#" << nid;
+    DLOG(INFO) << "Allocating operator resources for node#" << nid;
     if (node->is_graph()) {
       // TODO
     } else {
@@ -285,6 +285,13 @@ GraphExecutorV2::GraphExecutorV2(const Graph& graph,
 }
 
 GraphExecutorV2::~GraphExecutorV2() {
+  const auto& idx = graph_.indexed_graph();
+  for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
+    OpNode& opnode = op_nodes_.CopyOnWrite()->value[nid];
+    if (opnode.cached_opr) {
+      Engine::Get()->DeleteOperator(opnode.cached_opr);
+    }
+  }
 }
 
 void GraphExecutorV2::Run(const vector<NDArray>& arguments,
@@ -331,7 +338,7 @@ void GraphExecutorV2::Run(const vector<NDArray>& arguments,
       opnode.exec->op_ctx.is_train = option.is_train;
       if (opnode.dirty) {
         // Create operator closure for dirty op.
-        LOG(INFO) << "Setup closure for node#" << nid << ": " << node->attrs.name;
+        DLOG(INFO) << "Setup closure for node#" << nid << ": " << node->attrs.name;
         const auto& op_exec = op_execs->value[nid];
         const Context& ctx = context.at(device->value[nid]);
         SetupClosure(graph_, nid, shapes, dtypes, mem_plan, data_entries_,
@@ -378,7 +385,7 @@ void GraphExecutorV2::Run(const vector<NDArray>& arguments,
 #else
         bool profiling = false;
 #endif
-        LOG(INFO) << "Push Node#" << nid << " " << node->attrs.name;
+        DLOG(INFO) << "Push Node#" << nid << " " << node->attrs.name;
         Engine::Get()->Push(opnode.cached_opr, opnode.ctx, 0, profiling);
       } else {
         LOG(FATAL) << "Cannot execute Node#" << nid << " " << node->attrs.name;
@@ -494,8 +501,8 @@ void GraphExecutorV2::SetupDataEntries() {
     const size_t nword = (st.max_bytes + 3) / 4;
     CHECK_LE(nword, std::numeric_limits<dim_t>::max());
     TShape shape{static_cast<dim_t>(nword)};
-    LOG(INFO) << "Allocate data entry#" << data_entries_.size()
-              << " size=" << nword << " floats.";
+    DLOG(INFO) << "Allocate data entry#" << data_entries_.size()
+               << " size=" << nword << " floats.";
     data_entries_.push_back(NDArray(shape, context.at(st.device_id), delay_alloc));
   }
 }
