@@ -1,7 +1,25 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 /*!
- * Copyright (c) 2017 by Contributors
  * \file batchnorm_test.cc
- * \brief operator unit test utility functions
+ * \brief batchnorm operator unit test utility functions
  * \author Chris Olivier
 */
 
@@ -89,7 +107,7 @@ class BatchNormValidator : public test::op::Validator<DType, AccReal> {
         // expect unit variance
         EXPECT_NEAR(1, var, kErrorBound);
         if (!Super::isNear(AccReal(1), var, kErrorBound)) {
-          LOG(WARNING) << "Variance is not close enough to 1"
+          LOG(WARNING) << "Variance is not close enough to 1 "
                        << saveSum << " (" << sum << "), "
                        << saveVar << " (" << var << ")";
         }
@@ -193,7 +211,7 @@ class BatchNormValidator : public test::op::Validator<DType, AccReal> {
         // expect unit variance
         EXPECT_NEAR(1, var, kErrorBound);
         if (!Super::isNear(AccReal(1), var, kErrorBound)) {
-          LOG(WARNING) << "Variance is not close enough to 1"
+          LOG(WARNING) << "Variance is not close enough to 1 "
                        << saveSum << " (" << sum << "), "
                        << saveVar << " (" << var << ")";
         }
@@ -424,7 +442,7 @@ static StreamType& PRT(
   *os << test::op::BasicOperatorData<DType, AccReal>::bvt2String(bvt) << ": " << idx
       << ": ";
   const TBlob& blob = obj.getBlobVect(bvt)[idx];
-  MSHADOW_REAL_TYPE_SWITCH(blob.type_flag_, DTypeX, { test::print_blob<DTypeX>(os, blob); });
+  test::print(RunContext(), os, blob);
   return *os;
 }
 
@@ -432,7 +450,7 @@ template<typename StreamType, typename Prop, typename DType, typename AccReal>
 static StreamType& dumpF(StreamType *os,
                          const test::op::OpInfo<Prop, DType, AccReal>& prop,
                          const size_t x = 0) {
-  if (test::debugOutput) {
+  if (test::debug_output) {
     *os << std::endl;
     if (x) {
       *os << "=============================" << std::endl;
@@ -458,7 +476,7 @@ template<typename StreamType, typename Prop, typename DType, typename AccReal>
 static StreamType& dumpB(StreamType *os,
                          const test::op::OpInfo<Prop, DType, AccReal>& prop,
                          const size_t x = 0) {
-  if (test::debugOutput) {
+  if (test::debug_output) {
     *os << std::endl;
     if (x) {
       *os << "=============================" << std::endl;
@@ -698,14 +716,18 @@ static void timingTest(const std::string& label,
                        const bool stochastic,
                        const test::op::kwargs_t& kwargs,
                        const int dim = 0,
-                       const size_t count = 1) {
+                       size_t count = 1) {
   std::cout << std::endl << std::flush;
 
 #ifdef NDEBUG
-  const size_t COUNT = 50;
+  size_t COUNT = 50;
 #else
-  const size_t COUNT = 5;
+  size_t COUNT = 5;
 #endif
+  if (mxnet::test::quick_test) {
+    COUNT = 2;
+    count = 1;
+  }
 
   test::perf::TimingInstrument timing;
 
@@ -793,10 +815,13 @@ TEST(BATCH_NORM, TestStochasticTiming_2D) {
 /*! \brief Performance tests */
 TEST(BATCH_NORM, TestTiming_2D) {
 #ifdef NDEBUG
-  const size_t THISCOUNT = 10;
+  size_t THISCOUNT = 10;
 #else
-  const size_t THISCOUNT = 2;
+  size_t THISCOUNT = 2;
 #endif
+  if (mxnet::test::quick_test) {
+    THISCOUNT = 1;
+  }
   MSHADOW_REAL_TYPE_SWITCH_EX(
     mshadow::kFloat32, DType, AccReal,
     {
@@ -874,8 +899,8 @@ TEST(BATCH_NORM, TestIterAll) {
           kwargs.push_back({ "cudnn_off", "True" });
         }
         for (TShape shape : shapes) {
-          for (int g1 = 0; g1 < 2U; ++g1) {
-            for (int g2 = 0; g2 < 2U; ++g2) {
+          for (int g1 = 0; g1 < 2; ++g1) {
+            for (int g2 = 0; g2 < 2; ++g2) {
               for (int type : v2_types) {
                 MSHADOW_REAL_TYPE_SWITCH_EX(
                   type, DType, AccReal,
@@ -994,7 +1019,7 @@ TEST(BATCH_NORM, Test2DBackward_Complex) {
   MSHADOW_REAL_TYPE_SWITCH_EX(
     mshadow::kFloat32, DType, AccReal,
     {
-      test::ScopeSet<bool> noDebugOutput(&test::debugOutput, false);
+      test::ScopeSet<bool> noDebugOutput(&test::debug_output, false);
       const TShape inputShape({9, 14, 16, 91});
       test::op::OpInfoPair<op::BatchNormV1Prop, op::BatchNormProp, DType, AccReal> bi =
         testForwardAndBackward<op::BatchNormV1Prop, op::BatchNormProp, DType, AccReal>(
@@ -1201,7 +1226,7 @@ class ChannelAxisTestData {
   std::vector<std::vector<DType>>   channel_data_;
 
   static void print(const std::string& label, const std::vector<std::vector<DType>>& m) {
-    if (test::debugOutput) {
+    if (test::debug_output) {
       if (!label.empty()) {
         std::cout << label << ": ";
       }
@@ -1223,7 +1248,7 @@ class ChannelAxisTestData {
   }
 
   static void print(const std::string& label, const TBlob& blob) {
-    if (test::debugOutput) {
+    if (test::debug_output) {
       if (!label.empty()) {
         std::cout << label << ": ";
       }
@@ -1317,7 +1342,7 @@ TEST(BATCH_NORM, TestChannelAxisSaveAndLoad) {
   typedef float AccReal;
 
   const std::vector<std::vector<DType>> myData =
-    { { 1.0f, 1.0f, 1.0, 1.0 },
+    { { 1.0f, 1.0f, 1.0f, 1.0f },
       { 2.0f, 2.0f, 2.0f, 2.0f },
       { 3.0f, 3.0f, 3.0f, 3.0f } };
 
@@ -1351,7 +1376,7 @@ static TShape MakeShape(const std::vector<index_t>& shape,
     newShape[x] = index_t(shape[x]);
   }
   newShape[channelAxis] = index_t(channelCount);
-  for (int x = channelAxis + 1; x < dim; ++x) {
+  for (index_t x = channelAxis + 1; x < dim; ++x) {
     newShape[x] = shape[x - 1];
   }
   return newShape;
@@ -1452,7 +1477,7 @@ static void runChannelAxisTest(
   ChannelAxisTestData<DType>::print("blob 2 output grad", info_c2.data_->c_.blob_out_grad_[0]);
 
   // Run both operators forward and backwards several times
-  for (int x = 0; x < numberOfPasses; ++x) {
+  for (index_t x = 0; x < numberOfPasses; ++x) {
     info_c1.data_->forward();
     info_c2.data_->forward();
 
@@ -1508,7 +1533,7 @@ TEST(BATCH_NORM, TestChannelAxisSimple) {
  *  backward result equivalence here implies correctness for other channel positions
  */
 TEST(BATCH_NORM, TestChannelAxis) {
-  test::ScopeSet<bool> noDebugOutput(&test::debugOutput, false);
+  test::ScopeSet<bool> noDebugOutput(&test::debug_output, false);
 
   test::op::kwargs_t kwargs;
   const std::vector<std::vector<index_t>> shapes =
@@ -1521,8 +1546,8 @@ TEST(BATCH_NORM, TestChannelAxis) {
       kwargs.push_back({"use_global_stats", tof[x2]});
       for (size_t x3 = 0; x3 < 2U; ++x3) {
         kwargs.push_back({"cudnn_off", tof[x3]});
-        for (int g1 = 0; g1 < 2U; ++g1) {
-          for (int g2 = 0; g2 < 2U; ++g2) {
+        for (index_t g1 = 0; g1 < 2U; ++g1) {
+          for (index_t g2 = 0; g2 < 2U; ++g2) {
             for (const std::vector<index_t> &simpleShape : shapes) {
               const int dim = static_cast<int>(simpleShape.size());
               for (signed int channelAxis = -dim, shapeDim = dim;

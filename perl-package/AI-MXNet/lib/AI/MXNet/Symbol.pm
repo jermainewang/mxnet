@@ -1,3 +1,20 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
 package AI::MXNet::Symbol;
 
 =head1 NAME
@@ -9,6 +26,7 @@ use strict;
 use warnings;
 use AI::MXNet::Base;
 use AI::MXNet::Symbol::Base;
+use AI::MXNet::Symbol::Random;
 use AI::MXNet::Types;
 use Mouse;
 use AI::MXNet::Function::Parameters;
@@ -20,6 +38,7 @@ use overload
     '/'   => \&divide,
     '/='  => \&idivide,
     '**'  => \&power,
+    '%'   => \&mod,
     '=='  => \&equal,
     '!='  => \&not_equal,
     '>'   => \&greater,
@@ -55,7 +74,11 @@ method STORABLE_thaw($cloning, $json)
 method stringify($other=, $reverse=)
 {
     my $name = $self->name;
-    sprintf("<%s %s>", ref($self), $name ? $name : 'Grouped');
+    sprintf(
+        "<%s %s%s>",
+        ref($self),
+        $name ? ($name, '') : ('group [', join(', ', map { $_->name } @{ $self }) . ']')
+    );
 }
 
 method add(AI::MXNet::Symbol|Num $other, $reverse=)
@@ -167,6 +190,16 @@ method lesser_equal(AI::MXNet::Symbol|Num $other, $reverse=)
 method true_divide(AI::MXNet::Symbol|Num $other, $reverse=)
 {
     return $self->divide($other, $reverse);
+}
+
+method mod(AI::MXNet::Symbol|Num $other, $reverse=)
+{
+    return _ufunc_helper(
+        $self,
+        $other,
+        qw/_Mod _ModScalar _RModScalar/,
+        $reverse
+    );
 }
 
 method maximum(AI::MXNet::Symbol|Num $other)
@@ -329,7 +362,7 @@ method attr_dict()
 
 method _set_attr(Str @args)
 {
-    my %kwargs = @args; 
+    my %kwargs = @args;
     while(my ($key, $val) = each(%kwargs))
     {
         check_call(
@@ -429,6 +462,25 @@ method list_auxiliary_states()
 }
 
 
+=head2 list_inputs
+
+    Lists all arguments and auxiliary states of this Symbol.
+
+    Returns
+    -------
+    inputs : array ref of str
+    List of all inputs.
+
+    Examples
+    --------
+    >>> my $bn = mx->sym->BatchNorm(name=>'bn');
+=cut
+
+method list_inputs()
+{
+    return scalar(check_call(AI::NNVMCAPI::SymbolListInputNames($self->handle, 0)));
+}
+
 =head2 infer_type
 
         Infer the type of outputs and arguments of given known types of arguments.
@@ -462,7 +514,7 @@ method list_auxiliary_states()
 
 method infer_type(Str|Undef @args)
 {
-    my ($positional_arguments, $kwargs, $kwargs_order) = _parse_arguments("Dtype", @args); 
+    my ($positional_arguments, $kwargs, $kwargs_order) = _parse_arguments("Dtype", @args);
     my $sdata = [];
     my $keys  = [];
     if(@$positional_arguments)
@@ -533,8 +585,8 @@ method infer_shape(Maybe[Str|Shape] @args)
         my ($arg_shapes) = $self->_infer_shape_impl(1, @args);
         my $arg_names    = $self->list_arguments;
         my @unknowns;
-        zip(sub {
-            my ($name, $shape) = @_;
+        for(zip($arg_names, $arg_shapes)) {
+            my ($name, $shape) = @$_;
             if(not ref $shape or not @$shape or not product(@$shape))
             {
                 if(@unknowns >= 10)
@@ -547,7 +599,7 @@ method infer_shape(Maybe[Str|Shape] @args)
                     push @unknowns, "$name @shape";
                 }
             }
-        }, $arg_names, $arg_shapes);
+        }
         AI::MXNet::Logging->warning(
             "Cannot decide shape for the following arguments "
             ."(0s in shape means unknown dimensions). "
@@ -680,7 +732,7 @@ method _get_ndarray_inputs(
     my ($arg_handles, $arg_arrays) = ([], []);
     if(ref $args eq 'ARRAY')
     {
-        confess("Length of $arg_key do not match number of arguments") 
+        confess("Length of $arg_key do not match number of arguments")
             unless @$args == @$arg_names;
         @{ $arg_handles } = map { $_->handle } @{ $args };
         $arg_arrays = $args;
@@ -1185,7 +1237,7 @@ method Variable(
     Maybe[Num]                    :$lr_mult=,
     Maybe[Num]                    :$wd_mult=,
     Maybe[Dtype]                  :$dtype=,
-    Maybe[AI::MXNet::Initializer] :$init=,
+    Maybe[Initializer]            :$init=,
     HashRef[Str]                  :$kwargs={},
     Maybe[Str]                    :$__layout__=
 )
@@ -1415,5 +1467,8 @@ sub  _ufunc_helper
         return __PACKAGE__->can($fn_symbol)->(__PACKAGE__, $lhs, $rhs);
     }
 }
+
+sub contrib { 'AI::MXNet::Contrib::Symbol' }
+sub random  { 'AI::MXNet::Symbol::Random' }
 
 1;

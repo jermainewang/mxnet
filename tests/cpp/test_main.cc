@@ -1,5 +1,23 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 /*!
- * Copyright (c) 2017 by Contributors
  * \file test_main.cc
  * \brief operator unit test utility functions
  * \author Chris Olivier
@@ -20,10 +38,12 @@ static bool dumpCallback(const google_breakpad::MinidumpDescriptor& descriptor,
 namespace mxnet { namespace test {
 bool unitTestsWithCuda = false;
 #ifdef NDEBUG
-bool debugOutput = false;
+bool debug_output = false;
 #else
-bool debugOutput = false;
+bool debug_output = false;
 #endif
+bool quick_test = false;
+bool performance_run = false;
 }}
 
 #if MXNET_USE_CUDA
@@ -66,7 +86,11 @@ int main(int argc, char ** argv) {
       // override (ie force attempt CUDA)
       mxnet::test::unitTestsWithCuda = true;
     } else if (!strcmp(argv[x], "--debug")) {
-      mxnet::test::debugOutput = true;
+      mxnet::test::debug_output = true;
+    } else if (!strcmp(argv[x], "--perf")) {
+      mxnet::test::performance_run = true;
+    } else if (!strcmp(argv[x], "--quick") || !strcmp(argv[x], "-q")) {
+      mxnet::test::quick_test = true;
     }
   }
 
