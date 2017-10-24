@@ -1998,6 +1998,7 @@ MXNET_DLL int MXRtcCudaKernelCall(CudaKernelHandle handle, int dev_id, void** ar
 
 /////////////// Subgraph APIs
 typedef void *GraphHandle;
+typedef void *GraphExecutorV2Handle;
 MXNET_DLL int MXGraphCreate(SymbolHandle symbol, GraphHandle *out);
 MXNET_DLL int MXGraphFree(GraphHandle graph);
 MXNET_DLL int MXGraphSpecialize(GraphHandle graph,
@@ -2031,7 +2032,11 @@ MXNET_DLL int MXSymbolCreateGraphSymbol(GraphHandle graph,
                                         const char **keys,
                                         const char **vals,
                                         SymbolHandle *out);
-MXNET_DLL int MXGraphEval(GraphHandle graph,
+MXNET_DLL int MXExecV2Create(GraphHandle graph,
+                             int dynamic_allocation,
+                             int zero_copy,
+                             GraphExecutorV2Handle *out);
+MXNET_DLL int MXExecV2Run(GraphExecutorV2Handle ehdl,
                           int num_inputs,
                           NDArrayHandle *inputs,
                           int *num_outputs,

@@ -120,7 +120,6 @@ FunctionHandle = ctypes.c_void_p
 OpHandle = ctypes.c_void_p
 CachedOpHandle = ctypes.c_void_p
 SymbolHandle = ctypes.c_void_p
-GraphHandle = ctypes.c_void_p
 ExecutorHandle = ctypes.c_void_p
 DataIterCreatorHandle = ctypes.c_void_p
 DataIterHandle = ctypes.c_void_p
@@ -129,6 +128,9 @@ RecordIOHandle = ctypes.c_void_p
 RtcHandle = ctypes.c_void_p
 CudaModuleHandle = ctypes.c_void_p
 CudaKernelHandle = ctypes.c_void_p
+
+GraphHandle = ctypes.c_void_p
+GraphExecutorV2Handle = ctypes.c_void_p
 #----------------------------
 # helper function definition
 #----------------------------

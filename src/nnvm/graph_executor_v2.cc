@@ -1,6 +1,6 @@
 /*!
  * Copyright (c) 2016 by Contributors
- * \file graph_executor_v2.cc
+ * \file graph_ptr_executor_v2.cc
  * \brief Executor to execute the computation graph.
  */
 #include "./graph_executor_v2.h"
@@ -176,7 +176,7 @@ void SetupClosure(const Graph& graph,
   auto exec_fun = [capture] (
       RunContext ctx, Engine::CallbackOnComplete on_complete) {
     auto exec = capture.exec;
-    const bool is_async = exec->exec_type() == Operator::kAsync;
+    const bool is_async = exec->exec_type() == ExecType::kAsync;
     const bool is_gpu = capture.ctx.dev_mask() == gpu::kDevMask;
     if (is_async) {
       exec->op_ctx.async_on_complete = on_complete;
@@ -276,16 +276,16 @@ void InitOpClosureRec(const Graph& graph,
 }
 }  // namespace
 
-GraphExecutorV2::GraphExecutorV2(const Graph& graph,
+GraphExecutorV2::GraphExecutorV2(shared_ptr<const Graph> graph,
                                  const GraphExecutorV2::Config& config)
-  :graph_(graph), config_(config),
-   required_graph_attrs_(_InitRequiredGraphAttrs()) {
-  _CheckAllAttrsExist(graph_, required_graph_attrs_);
+  :graph_ptr_(graph), config_(config),
+   required_graph_ptr_attrs_(_InitRequiredGraphAttrs()) {
+  _CheckAllAttrsExist(*graph_ptr_, required_graph_ptr_attrs_);
   SetupResources();
 }
 
 GraphExecutorV2::~GraphExecutorV2() {
-  const auto& idx = graph_.indexed_graph();
+  const auto& idx = graph_ptr_->indexed_graph();
   for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
     OpNode& opnode = op_nodes_.CopyOnWrite()->value[nid];
     if (opnode.cached_opr) {
@@ -297,14 +297,15 @@ GraphExecutorV2::~GraphExecutorV2() {
 void GraphExecutorV2::Run(const vector<NDArray>& arguments,
                           vector<NDArray>* results,
                           const RunOption& option) {
-  const auto& idx = graph_.indexed_graph();
-  const auto& op_execs = graph_.node_attrs.GetColumn<shared_ptr<OpExecutor>>(
+  const auto& idx = graph_ptr_->indexed_graph();
+  const auto& op_execs = graph_ptr_->node_attrs.GetColumn<shared_ptr<OpExecutor>>(
       pass::attach_op::key);
-  const auto& device = graph_.node_attrs.GetColumn<int>(pass::ctx::device_key);
-  const auto& context = graph_.GetGlobalAttr<vector<Context>>(pass::ctx::ctx_key);
-  const auto* shapes = graph_.entry_attrs.GetColumn<TShape>(pass::shape::key).get();
-  const auto* dtypes = graph_.entry_attrs.GetColumn<int>(pass::dtype::key).get();
-  const auto* mem_plan = graph_.entry_attrs.GetColumn<StorageRef>(pass::plan_memory::ref_key).get();
+  const auto& device = graph_ptr_->node_attrs.GetColumn<int>(pass::ctx::device_key);
+  const auto& context = graph_ptr_->GetGlobalAttr<vector<Context>>(pass::ctx::ctx_key);
+  const auto* shapes = graph_ptr_->entry_attrs.GetColumn<TShape>(pass::shape::key).get();
+  const auto* dtypes = graph_ptr_->entry_attrs.GetColumn<int>(pass::dtype::key).get();
+  const auto* mem_plan = graph_ptr_->entry_attrs.GetColumn<StorageRef>(
+      pass::plan_memory::ref_key).get();
 
   LOG(INFO) << "Graph execution starts.";
 
@@ -320,7 +321,7 @@ void GraphExecutorV2::Run(const vector<NDArray>& arguments,
     LOG(INFO) << "Feeding result ndarrays.";
     // Result storage is provided. Feed the result array
     // as the output of the related operator.
-    CHECK_EQ(results->size(), graph_.outputs.size());
+    CHECK_EQ(results->size(), graph_ptr_->outputs.size());
     for (size_t i = 0; i < results->size(); ++i) {
       FeedRstArray((*results)[i], i);
     }
@@ -341,7 +342,7 @@ void GraphExecutorV2::Run(const vector<NDArray>& arguments,
         DLOG(INFO) << "Setup closure for node#" << nid << ": " << node->attrs.name;
         const auto& op_exec = op_execs->value[nid];
         const Context& ctx = context.at(device->value[nid]);
-        SetupClosure(graph_, nid, shapes, dtypes, mem_plan, data_entries_,
+        SetupClosure(*graph_ptr_, nid, shapes, dtypes, mem_plan, data_entries_,
                      &opnode);
       }
     }
@@ -351,10 +352,10 @@ void GraphExecutorV2::Run(const vector<NDArray>& arguments,
     LOG(INFO) << "Fetching result ndarrays.";
     // Result array is not provided. Fetch the output arrays
     // of the graph as the result array.
-    for (size_t i = 0; i < graph_.outputs.size(); ++i) {
+    for (size_t i = 0; i < graph_ptr_->outputs.size(); ++i) {
       //LOG(INFO) << "Fetch rst#" << i << " name="
-        //<< graph_.outputs[i].node->attrs.name << "_output"
-        //<< graph_.outputs[i].index;
+        //<< graph_ptr_.outputs[i].node->attrs.name << "_output"
+        //<< graph_ptr_.outputs[i].index;
       results->push_back(FetchRstArray(i));
     }
   }
@@ -374,7 +375,7 @@ void GraphExecutorV2::Run(const vector<NDArray>& arguments,
     } else {
       OpNode& opnode = op_nodes_.CopyOnWrite()->value[nid];
       if (opnode.skip_exec_node) continue;
-      if (opnode.exec->exec_type() == Operator::kCrossDeviceCopy) {
+      if (opnode.exec->exec_type() == ExecType::kCrossDeviceCopy) {
         CHECK_EQ(node->inputs.size(), 1U);
         CHECK_EQ(opnode.in_array.size(), 1U);
         CHECK_EQ(opnode.out_array.size(), 1U);
@@ -402,9 +403,9 @@ void GraphExecutorV2::Run(const vector<NDArray>& arguments,
 }
   
 void GraphExecutorV2::FeedArgArray(const NDArray& array, size_t i) {
-  const auto* shapes = graph_.entry_attrs.GetColumn<TShape>(pass::shape::key).get();
-  const auto* dtypes = graph_.entry_attrs.GetColumn<int>(pass::dtype::key).get();
-  const auto& idx = graph_.indexed_graph();
+  const auto* shapes = graph_ptr_->entry_attrs.GetColumn<TShape>(pass::shape::key).get();
+  const auto* dtypes = graph_ptr_->entry_attrs.GetColumn<int>(pass::dtype::key).get();
+  const auto& idx = graph_ptr_->indexed_graph();
   for (const OpInputEntry& ent : arg_to_op_input_[i]) {
     const uint32_t nid = ent.first;
     const size_t i = ent.second;
@@ -414,18 +415,18 @@ void GraphExecutorV2::FeedArgArray(const NDArray& array, size_t i) {
 }
 
 void GraphExecutorV2::FeedRstArray(const NDArray& array, size_t i) {
-  const auto& idx = graph_.indexed_graph();
-  const auto& op_execs = graph_.node_attrs.GetColumn<shared_ptr<OpExecutor>>(
+  const auto& idx = graph_ptr_->indexed_graph();
+  const auto& op_execs = graph_ptr_->node_attrs.GetColumn<shared_ptr<OpExecutor>>(
       pass::attach_op::key);
-  const NodeEntry& outent = graph_.outputs[i];
+  const NodeEntry& outent = graph_ptr_->outputs[i];
   const uint32_t nid = idx.node_id(outent.node.get());
   op_nodes_.CopyOnWrite()->value[nid].out_array[outent.index] = array;
   op_nodes_.CopyOnWrite()->value[nid].dirty = true;
 }
 
 const NDArray& GraphExecutorV2::FetchRstArray(size_t i) {
-  const auto& idx = graph_.indexed_graph();
-  const NodeEntry& outent = graph_.outputs[i];
+  const auto& idx = graph_ptr_->indexed_graph();
+  const NodeEntry& outent = graph_ptr_->outputs[i];
   const uint32_t nid = idx.node_id(outent.node.get());
   return op_nodes_->value[nid].out_array[outent.index];
 }
@@ -438,24 +439,25 @@ void GraphExecutorV2::SetupResources() {
 }
 
 const vector<string>& GraphExecutorV2::RequiredGraphAttrs() const {
-  return required_graph_attrs_;
+  return required_graph_ptr_attrs_;
 }
 
 void GraphExecutorV2::SetupOpResources() {
   using pass::plan_memory::StorageRef;
   // Use global resource pool for each executor for now.
   std::map<Context, Resource> cached_temp;
-  const auto* op_execs = graph_.node_attrs.GetColumn<shared_ptr<OpExecutor>>(
+  const auto* op_execs = graph_ptr_->node_attrs.GetColumn<shared_ptr<OpExecutor>>(
       pass::attach_op::key).get();
-  const Column<int>* device = graph_.node_attrs.GetColumn<int>(pass::ctx::device_key).get();
-  const auto* shapes = graph_.entry_attrs.GetColumn<TShape>(pass::shape::key).get();
-  const auto* dtypes = graph_.entry_attrs.GetColumn<int>(pass::dtype::key).get();
-  const auto* mem_plan = graph_.entry_attrs.GetColumn<StorageRef>(pass::plan_memory::ref_key).get();
-  SetupOpResourcesRec(graph_, op_execs, device, &cached_temp);
-  op_nodes_ = graph_.CreateNodeColumn<OpNode>();
-  InitOpClosureRec(graph_, op_execs, device, mem_plan, op_nodes_.CopyOnWrite());
+  const Column<int>* device = graph_ptr_->node_attrs.GetColumn<int>(pass::ctx::device_key).get();
+  const auto* shapes = graph_ptr_->entry_attrs.GetColumn<TShape>(pass::shape::key).get();
+  const auto* dtypes = graph_ptr_->entry_attrs.GetColumn<int>(pass::dtype::key).get();
+  const auto* mem_plan = graph_ptr_->entry_attrs.GetColumn<StorageRef>(
+      pass::plan_memory::ref_key).get();
+  SetupOpResourcesRec(*graph_ptr_, op_execs, device, &cached_temp);
+  op_nodes_ = graph_ptr_->CreateNodeColumn<OpNode>();
+  InitOpClosureRec(*graph_ptr_, op_execs, device, mem_plan, op_nodes_.CopyOnWrite());
   // Save mapping from arguments to operator inputs.
-  const auto& idx = graph_.indexed_graph();
+  const auto& idx = graph_ptr_->indexed_graph();
   const auto& input_nids = idx.input_nodes();
   arg_to_op_input_.resize(input_nids.size());
   unordered_map<uint32_t, size_t> argnid2idx;
@@ -488,11 +490,12 @@ void GraphExecutorV2::SetupDataEntries() {
   using pass::plan_memory::StorageRef;
   using pass::plan_memory::storage_key;
   using pass::ctx::ctx_key;
-  const auto& storage = graph_.GetGlobalAttr<vector<Storage>>(storage_key);
-  const auto& context = graph_.GetGlobalAttr<vector<Context>>(ctx_key);
-  const auto* shapes = graph_.entry_attrs.GetColumn<TShape>(pass::shape::key).get();
-  const auto* dtypes = graph_.entry_attrs.GetColumn<int>(pass::dtype::key).get();
-  const auto* mem_plan = graph_.entry_attrs.GetColumn<StorageRef>(pass::plan_memory::ref_key).get();
+  const auto& storage = graph_ptr_->GetGlobalAttr<vector<Storage>>(storage_key);
+  const auto& context = graph_ptr_->GetGlobalAttr<vector<Context>>(ctx_key);
+  const auto* shapes = graph_ptr_->entry_attrs.GetColumn<TShape>(pass::shape::key).get();
+  const auto* dtypes = graph_ptr_->entry_attrs.GetColumn<int>(pass::dtype::key).get();
+  const auto* mem_plan = graph_ptr_->entry_attrs.GetColumn<StorageRef>(
+      pass::plan_memory::ref_key).get();
   const bool delay_alloc = !config_.dynamic_allocation;
   data_entries_.reserve(storage.size());
   for (const Storage& st : storage) {
@@ -508,7 +511,7 @@ void GraphExecutorV2::SetupDataEntries() {
 }
 
 void GraphExecutorV2::ResetOpNode(uint32_t nid) {
-  const auto& idx = graph_.indexed_graph();
+  const auto& idx = graph_ptr_->indexed_graph();
   const Node* node = idx[nid].source;
   OpNode& opnode = op_nodes_.CopyOnWrite()->value[nid];
   opnode.in_array.clear();

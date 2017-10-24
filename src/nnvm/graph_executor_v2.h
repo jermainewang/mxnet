@@ -1,6 +1,6 @@
 /*!
  * Copyright (c) 2016 by Contributors
- * \file graph_executor_v2.h
+ * \file graph_ptr_executor_v2.h
  * \brief Executor to execute the computation graph.
  */
 #ifndef MXNET_EXECUTOR_GRAPH_EXECUTOR_V2_H_
@@ -30,7 +30,7 @@ class GraphExecutorV2 {
     RunOption() {}
   };
 
-  GraphExecutorV2(const nnvm::Graph& graph,
+  GraphExecutorV2(std::shared_ptr<const nnvm::Graph> graph,
                   const Config& config = Config());
 
   ~GraphExecutorV2();
@@ -57,10 +57,10 @@ class GraphExecutorV2 {
 
  private:
   // The graph to be evaluated.
-  const nnvm::Graph& graph_;
+  std::shared_ptr<const nnvm::Graph> graph_ptr_;
   const Config config_;
   // Attributes required for graph evaluation.
-  const std::vector<std::string> required_graph_attrs_;
+  const std::vector<std::string> required_graph_ptr_attrs_;
 
   // Data entries.
   std::vector<NDArray> data_entries_;

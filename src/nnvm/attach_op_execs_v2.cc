@@ -35,7 +35,7 @@ class ForwardOpExecutor : public OpExecutor {
     mkl_tblobs_prv_to_cpu(aux_data_);
 #endif
   }
-  Operator::ExecType exec_type() const override {
+  ExecType exec_type() const override {
     return op_->exec_type();
   }
   shared_ptr<Operator> op() const {
@@ -89,7 +89,7 @@ class BackwardOpExecutor : public OpExecutor {
     mkl_tblobs_prv_to_cpu(aux_data_);
 #endif
   }
-  Operator::ExecType exec_type() const override {
+  ExecType exec_type() const override {
     return op_->exec_type();
   }
   explicit BackwardOpExecutor(shared_ptr<Operator> op,
@@ -154,8 +154,8 @@ class FComputeExecutor : public OpExecutor {
     mkl_tblobs_prv_to_cpu(out_data_);
 #endif
   }
-  Operator::ExecType exec_type() const override {
-    return Operator::kSync;
+  ExecType exec_type() const override {
+    return ExecType::kSync;
   }
   explicit FComputeExecutor(FCompute fcompute,
                             const NodeAttrs& attrs,
@@ -201,7 +201,7 @@ void AttachOpExecsRec(const Graph& g,
                       const Column<vector<uint32_t>>* mutate_index,
                       const Column<shared_ptr<OpExecutor>>* fwd_execs,
                       Column<shared_ptr<OpExecutor>>* execs) {
-  static auto& fcreate_layer_op = nnvm::Op::GetAttr<FCreateLayerOp>("FCreateLayerOp");
+  static auto& fcreate_layer_op = nnvm::Op::GetAttr<FCreateOpState>("FCreateOpState");
   static auto& is_layer_backward = nnvm::Op::GetAttr<bool>("TIsLayerOpBackward");
   const auto& idx = g.indexed_graph();
   const auto& context = g.GetGlobalAttr<vector<Context>>(ctx::ctx_key);
@@ -278,9 +278,12 @@ void AttachOpExecsRec(const Graph& g,
           ishape.emplace_back(vshape->value[idx.entry_id(e)]);
           itype.emplace_back(vdtype->value[idx.entry_id(e)]);
         }
+        // TODO(minjie): hack
         shared_ptr<Operator> opr;
-        opr.reset(fcreate_layer_op[node->op()](
-              node->attrs, context.at(vdevice->value[nid]), ishape, itype));
+        auto state = fcreate_layer_op[node->op()](
+              node->attrs, context.at(vdevice->value[nid]), ishape, itype);
+        state.get_state<op::OperatorState>().GiveTo(opr);
+        LOG(INFO) << "opr.get()=" << opr.get();
         const auto* opprop = mxnet::op::OpPropGetOpProperty(node->attrs);
         execs->value[nid] = std::make_shared<ForwardOpExecutor>(opr, opprop, midx);
       } else if (is_layer_backward.get(node->op(), false)) {

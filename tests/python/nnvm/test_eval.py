@@ -258,6 +258,7 @@ def _test_eval_helper(net, g, data_shape):
                         grad_req='write',
                         aux_states=aux_arrays)
     legacy_results = executor.forward(is_train=False)
+
     # Use new eval API.
     shape_args = {'shape_inputs' : [data_shape]}
     dtype_args = {'dtype_inputs' : [0]}
@@ -270,7 +271,8 @@ def _test_eval_helper(net, g, data_shape):
     in_arrays = _pack_in_arrays(arg_arrays, net.list_arguments(),
                                 aux_arrays, net.list_auxiliary_states(),
                                 net.list_inputs())
-    new_results = g.eval(in_arrays, is_training=False)
+    execv2 = graph.GraphExecutor(g, dynamic_alloc=True, zero_copy=True)
+    new_results = execv2.run(in_arrays, is_training=False)
     if not isinstance(new_results, list):
         new_results = [new_results]
     assert len(legacy_results) == len(new_results)
@@ -316,7 +318,8 @@ def _test_grad_eval_helper(net, g, data_shape, need_head_grad=False):
                                      aux_arrays, net.list_auxiliary_states(),
                                      head_grad_arrays, net.list_outputs(),
                                      net.list_inputs())
-    new_grad_arrays = g.eval(in_arrays, is_training=True)
+    execv2 = graph.GraphExecutor(g, dynamic_alloc=True, zero_copy=True)
+    new_grad_arrays = execv2.run(in_arrays, is_training=True)
     if not isinstance(new_grad_arrays, list):
         new_grad_arrays = [new_grad_arrays]
     assert len(legacy_grad_arrays) == len(new_grad_arrays)
@@ -327,8 +330,7 @@ def _test_grad_eval_helper(net, g, data_shape, need_head_grad=False):
 def test_simple_eval():
     _test_eval_helper(_conv_block_sym(),
                       _conv_block(),
-                      [16, 8, 10, 10],
-                      need_head_grad=True)
+                      [16, 8, 10, 10])
 
 def test_simple_grad_eval():
     _test_grad_eval_helper(_conv_block_sym(),
@@ -346,6 +348,6 @@ def test_resnet():
                       [16, 3, 224, 224])
     
 if __name__ == '__main__':
-    #test_simple_eval()
-    #test_simple_grad_eval()
-    test_resnet()
+    test_simple_eval()
+    test_simple_grad_eval()
+    #test_resnet()

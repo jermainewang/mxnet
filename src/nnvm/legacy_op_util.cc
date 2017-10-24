@@ -12,6 +12,8 @@
 #include <nnvm/graph.h>
 #include <memory>
 
+#include "./mx_passes.h"
+
 namespace mxnet {
 namespace op {
 
@@ -52,92 +54,6 @@ class ParsedOpProp {
     inputs.insert(
         inputs.end(), aux_states.begin(), aux_states.end());
   }
-};
-
-class OperatorState {
- public:
-  OperatorState(Operator *opr, const OperatorProperty *prop) {
-    opr_ = opr;
-    fwd_init_ = bwd_init_ = false;
-
-    in_data_fwd_.resize(prop->ListArguments().size());
-    in_data_bwd_.resize(prop->ListArguments().size());
-    out_data_.resize(prop->NumOutputs());
-    aux_data_.resize(prop->ListAuxiliaryStates().size());
-    in_grad_.resize(in_data_fwd_.size());
-    out_grad_.resize(prop->NumVisibleOutputs());
-
-    std::vector<TBlob*> out_grad_ptr(out_grad_.size());
-    for (size_t i = 0; i < out_grad_.size(); ++i) {
-      out_grad_ptr[i] = &out_grad_[i];
-    }
-    std::vector<TBlob*> in_data_ptr(in_data_fwd_.size());
-    for (size_t i = 0; i < in_data_fwd_.size(); ++i) {
-      in_data_ptr[i] = &in_data_bwd_[i];
-    }
-    std::vector<TBlob*> out_data_ptr(out_data_.size());
-    for (size_t i = 0; i < out_data_.size(); ++i) {
-      out_data_ptr[i] = &out_data_[i];
-    }
-    arg_data_ptr_ = prop->BackwardInputs(
-        out_grad_ptr, in_data_ptr, out_data_ptr);
-  }
-
-  ~OperatorState() { delete opr_; }
-
-  void Forward(const OpContext &ctx,
-               const std::vector<TBlob>& inputs,
-               const std::vector<OpReqType>& req,
-               const std::vector<TBlob>& outputs) {
-    if (!fwd_init_) {
-      CHECK_EQ(inputs.size(), in_data_fwd_.size() + aux_data_.size());
-      CHECK_EQ(outputs.size(), out_data_.size());
-      // in_data_bwd_ has the same tblobs as the ones in in_data_fwd_, except that the ones
-      // referred by arg_data_ptr_ will be overriden
-      for (size_t i = 0; i < in_data_fwd_.size(); ++i) in_data_fwd_[i] = inputs[i];
-      for (size_t i = 0; i < in_data_fwd_.size(); ++i) in_data_bwd_[i] = inputs[i];
-      for (size_t i = 0; i < aux_data_.size(); ++i) {
-        aux_data_[i] = inputs[i + in_data_fwd_.size()];
-      }
-      for (size_t i = 0; i < out_data_.size(); ++i) out_data_[i] = outputs[i];
-      fwd_init_ = true;
-    }
-    opr_->Forward(ctx, in_data_fwd_, req, out_data_, aux_data_);
-  }
-
-  void Backward(const OpContext &ctx,
-                const std::vector<TBlob>& inputs,
-                const std::vector<OpReqType>& req,
-                const std::vector<TBlob>& outputs) {
-    if (!bwd_init_) {
-      CHECK(fwd_init_);
-      CHECK_EQ(arg_data_ptr_.size() + aux_data_.size(), inputs.size());
-      // override tblobs pointed by arg_data_ptr_ since they might not contain
-      // initialized data during forward pass.
-      for (size_t i = 0; i < arg_data_ptr_.size(); ++i) {
-        *arg_data_ptr_[i] = inputs[i];
-      }
-      for (size_t i = 0; i < aux_data_.size(); ++i) {
-        aux_data_[i] = inputs[inputs.size() - aux_data_.size() + i];
-      }
-      CHECK_EQ(outputs.size(), in_grad_.size());
-      for (size_t i = 0; i < outputs.size(); ++i) in_grad_[i] = outputs[i];
-      bwd_init_ = true;
-    }
-    opr_->Backward(ctx, out_grad_, in_data_bwd_, out_data_, req, in_grad_, aux_data_);
-  }
-
- private:
-  Operator *opr_;
-  bool fwd_init_, bwd_init_;
-  // input data blobs for forward and backward
-  // in_data_fwd_ and in_data_bwd_ will hold different tblobs when StorageFallbackOpExecutor
-  // performs storage fallback on a non-default input NDArray. The one in in_data_fwd_ is
-  // generated when setting up forward executor, while the one in in_data_bwd_ is generated
-  // when setting up backward executor.
-  std::vector<TBlob> in_data_fwd_, in_data_bwd_;
-  std::vector<TBlob> aux_data_, out_data_, in_grad_, out_grad_;
-  std::vector<TBlob*> arg_data_ptr_;
 };
 
 void LegacyOpForward(const OpStatePtr& state,

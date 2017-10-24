@@ -9,7 +9,7 @@ import sys as _sys
 from .attribute import AttrScope
 from .base import _LIB
 from .base import check_call, c_array, c_str, mx_uint, py_str
-from .base import GraphHandle, SymbolHandle, NDArrayHandle
+from .base import GraphHandle, GraphExecutorV2Handle, SymbolHandle, NDArrayHandle
 from .symbol import Symbol, Variable
 from .ndarray import NDArray
 from .name import NameManager
@@ -147,10 +147,19 @@ class Graph(object):
             return [NDArray(ctypes.cast(array_hdls[i], NDArrayHandle))
                     for i in range(num_outputs.value)]
 
-    def eval(self, inputs, is_training=False):
+class GraphExecutor(object):
+    def __init__(self, graph, dynamic_alloc=True, zero_copy=True):
+        self._handle = GraphExecutorV2Handle()
+        check_call(_LIB.MXExecV2Create(
+            graph.handle,
+            ctypes.c_int(int(dynamic_alloc)),
+            ctypes.c_int(int(zero_copy)),
+            ctypes.byref(self._handle)))
+
+    def run(self, inputs, is_training=False):
         output_handles = ctypes.POINTER(NDArrayHandle)()
         num_outputs = ctypes.c_int(0)
-        check_call(_LIB.MXGraphEval(
+        check_call(_LIB.MXExecV2Run(
             self._handle,
             ctypes.c_int(len(inputs)),
             c_array(NDArrayHandle, [arr.handle for arr in inputs]),
@@ -162,6 +171,7 @@ class Graph(object):
         else:
             return [NDArray(ctypes.cast(output_handles[i], NDArrayHandle))
                     for i in range(num_outputs.value)]
+
 
 def create(symbol, name=None):
     handle = _create_graph_handle(symbol)
