@@ -24,11 +24,14 @@
 #include <mxnet/base.h>
 #include <mxnet/c_api.h>
 #include <mxnet/ndarray.h>
+#include <mxnet/imperative.h>
+
 #include <nnvm/c_api.h>
 #include <nnvm/graph.h>
 #include <nnvm/pass.h>
 #include <nnvm/pass_functions.h>
 #include <nnvm/symbolic.h>
+
 #include "./c_api_common.h"
 #include "../operator/operator_common.h"
 #include "../nnvm/graph_executor_v2.h"
@@ -295,12 +298,24 @@ int MXExecV2Run(GraphExecutorV2Handle ehdl,
     for (int i = 0; i < *num_outputs; ++i) {
       results.push_back(*rsts_ptr[i]);
     }
+  } else {
+    const auto& graph = exec->graph();
+    if (graph.global_attrs.count("num_visible_outputs")) {
+      *num_outputs = graph.GetGlobalAttr<size_t>("num_visible_outputs");
+    } else {
+      *num_outputs = graph.outputs.size();
+    }
   }
   GraphExecutorV2::RunOption opt;
   opt.is_train = (is_training == 1);
   exec->Run(arguments, &results, opt);
+
+  if (Imperative::Get()->is_recording()) {
+    NodeAttrs attrs;
+    //Imperative::Get()->RecordOp(std::move(attrs), arguments, results);
+  }
+
   if (rsts_ptr == nullptr) {
-    *num_outputs = results.size();
     // TODO(minjie): num visible outputs
     ret->ret_handles.clear();
     for (int i = 0; i < *num_outputs; ++i) {

@@ -453,50 +453,52 @@ void ComputeBackwardDependency() {
   using ::nnvm::Node;
   using ::nnvm::NodeEntry;
   auto& op_fgrad_map = Op::GetAttr<FGradient>("FGradient");
+  auto& op_fbwddep_map = Op::GetAttr<FBackwardDependency>("FBackwardDependency");
   for (const std::string& name : ::dmlc::Registry<Op>::ListAllNames()) {
     Op& op = ::dmlc::Registry<Op>::Get()->__REGISTER_OR_GET__(name);
-    if (op_fgrad_map.count(&op)) {
-      op.set_attr<FBackwardDependency>("FBackwardDependency", 
-                                       [] (const Node* fwd_node, 
-                                           std::vector<bool>* saved_inputs,
-                                           std::vector<bool>* saved_outputs) {
-          static auto& fgradient = Op::GetAttr<FGradient>("FGradient");
-          NodePtr node = Node::Create();
-          node->attrs = fwd_node->attrs;
-          CHECK(!node->is_variable() && !node->is_graph());
-          const uint32_t num_inputs = fwd_node->inputs.size();
-          const uint32_t num_outputs = node->num_outputs();
-          saved_inputs->resize(num_inputs, false);
-          saved_outputs->resize(num_outputs, false);
-          node->inputs.reserve(num_inputs);
-          for (uint32_t i = 0; i < num_inputs; ++i) {
-            node->inputs.emplace_back(NodeEntry{nullptr, i, 0});
-          }
-          std::vector<NodeEntry> ograds;
-          ograds.reserve(num_outputs);
-          for (uint32_t i = 0; i < num_outputs; ++i) {
-            ograds.emplace_back(NodeEntry{nullptr, i, 1});
-          }
-          std::vector<NodeEntry> igrads = fgradient[node->op()](node, ograds);
-          for (const auto& ent : igrads) {
-            if (ent.node == nullptr && ent.version == 0) {
-              (*saved_inputs)[ent.index] = true;
-            } else if (ent.node == node) {
-              (*saved_outputs)[ent.index] = true;
-            }
-          }
-          DFSVisit(igrads, [&](const NodePtr& gnode) {
-              if (!gnode || gnode == node) return;
-              for (const auto& ent : gnode->inputs) {
-                if (ent.node == nullptr && ent.version == 0) {
-                  (*saved_inputs)[ent.index] = true;
-                } else if (ent.node == node) {
-                  (*saved_outputs)[ent.index] = true;
-                }
-              }
-            });
-        });
+    if (!op_fgrad_map.count(&op) || op_fbwddep_map.count(&op)) {
+      continue;
     }
+    op.set_attr<FBackwardDependency>("FBackwardDependency", 
+                                     [] (const Node* fwd_node, 
+                                         std::vector<bool>* saved_inputs,
+                                         std::vector<bool>* saved_outputs) {
+        static auto& fgradient = Op::GetAttr<FGradient>("FGradient");
+        NodePtr node = Node::Create();
+        node->attrs = fwd_node->attrs;
+        CHECK(!node->is_variable() && !node->is_graph());
+        const uint32_t num_inputs = fwd_node->inputs.size();
+        const uint32_t num_outputs = node->num_outputs();
+        saved_inputs->resize(num_inputs, false);
+        saved_outputs->resize(num_outputs, false);
+        node->inputs.reserve(num_inputs);
+        for (uint32_t i = 0; i < num_inputs; ++i) {
+          node->inputs.emplace_back(NodeEntry{nullptr, i, 0});
+        }
+        std::vector<NodeEntry> ograds;
+        ograds.reserve(num_outputs);
+        for (uint32_t i = 0; i < num_outputs; ++i) {
+          ograds.emplace_back(NodeEntry{nullptr, i, 1});
+        }
+        std::vector<NodeEntry> igrads = fgradient[node->op()](node, ograds);
+        for (const auto& ent : igrads) {
+          if (ent.node == nullptr && ent.version == 0) {
+            (*saved_inputs)[ent.index] = true;
+          } else if (ent.node == node) {
+            (*saved_outputs)[ent.index] = true;
+          }
+        }
+        DFSVisit(igrads, [&](const NodePtr& gnode) {
+            if (!gnode || gnode == node) return;
+            for (const auto& ent : gnode->inputs) {
+              if (ent.node == nullptr && ent.version == 0) {
+                (*saved_inputs)[ent.index] = true;
+              } else if (ent.node == node) {
+                (*saved_outputs)[ent.index] = true;
+              }
+            }
+          });
+      });
   }
 }
 

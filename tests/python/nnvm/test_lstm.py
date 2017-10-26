@@ -84,6 +84,7 @@ class TrashLossLSTM(Block):
     def forward(self, data):
         outputs, _ = self.lstm(data)
         loss = trash_loss(self.cross_entropy, outputs)
+        return loss
 
 def test_lstm():
     N = 1
@@ -96,11 +97,10 @@ def test_lstm():
     lstm.collect_params().initialize(ctx=ctx)
     for i in range(20):
         t0 = time.time()
-        loss = lstm(data)
-        #with autograd.record():
-            #outputs, states = lstm(data)
-            #loss = trash_loss(outputs)
-            #loss.backward()
+        #loss = lstm(data)
+        with autograd.record():
+            loss = lstm(data)
+            loss.backward()
         print('Iter #%d, takes %fs' % (i, (time.time() - t0)))
 
 if __name__ == '__main__':

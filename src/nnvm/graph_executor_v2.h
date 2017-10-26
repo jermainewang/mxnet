@@ -12,8 +12,6 @@
 namespace mxnet {
 namespace exec {
 
-struct OpNode;
-
 // TODO(minjie):
 // * Bulk Execution
 // * DetectInplaceAddTo
@@ -41,11 +39,11 @@ class GraphExecutorV2 {
 
   const std::vector<std::string>& RequiredGraphAttrs() const;
 
+  const nnvm::Graph& graph() const { return *graph_ptr_; }
+
  private:
   void SetupResources();
-
   void SetupOpResources();
-
   void SetupDataEntries();
 
   void FeedArgArray(const NDArray& array, size_t i);
@@ -53,7 +51,7 @@ class GraphExecutorV2 {
   const NDArray& FetchRstArray(size_t i);
 
   void ResetDataEntries();
-  void ResetOpNode(uint32_t nid);
+  void ResetClosure(uint32_t nid);
 
  private:
   // The graph to be evaluated.
@@ -61,11 +59,12 @@ class GraphExecutorV2 {
   const Config config_;
   // Attributes required for graph evaluation.
   const std::vector<std::string> required_graph_ptr_attrs_;
+  // Operator nodes.
+  nnvm::Column<pass::cl::Closure>* closures_;
 
   // Data entries.
   std::vector<NDArray> data_entries_;
-  // Operator nodes.
-  nnvm::ColumnRef<OpNode> op_nodes_;
+
   // Data structure used to feed argument to the operator.
   typedef std::pair<uint32_t, size_t> OpInputEntry;
   std::vector<std::vector<OpInputEntry>> arg_to_op_input_;

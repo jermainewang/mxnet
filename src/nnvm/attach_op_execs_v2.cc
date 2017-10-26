@@ -26,8 +26,7 @@ using attach_op::OpExecutor;
 // forward executor
 class ForwardOpExecutor : public OpExecutor {
  public:
-  void Run(RunContext rctx) override {
-    op_ctx.run_ctx = rctx;
+  void Run(const OpContext& op_ctx) override {
     op_->Forward(op_ctx, in_data_, req, out_data_, aux_data_);
 #if MKL_EXPERIMENTAL == 1
     mkl_tblobs_prv_to_cpu(in_data_);
@@ -77,8 +76,7 @@ class ForwardOpExecutor : public OpExecutor {
 // backward executor
 class BackwardOpExecutor : public OpExecutor {
  public:
-  void Run(RunContext rctx) override {
-    op_ctx.run_ctx = rctx;
+  void Run(const OpContext& op_ctx) override {
     op_->Backward(op_ctx, out_grad_, in_data_, out_data_,
                   req, in_grad_, aux_data_);
 #if MKL_EXPERIMENTAL == 1
@@ -146,8 +144,7 @@ class BackwardOpExecutor : public OpExecutor {
 // fcompute executor executor
 class FComputeExecutor : public OpExecutor {
  public:
-  void Run(RunContext rctx) override {
-    op_ctx.run_ctx = rctx;
+  void Run(const OpContext& op_ctx) override {
     fcompute_(attrs_, op_ctx, in_data_, req, out_data_);
 #if MKL_EXPERIMENTAL == 1
     mkl_tblobs_prv_to_cpu(in_data_);
@@ -197,10 +194,13 @@ class FComputeExecutor : public OpExecutor {
 void AttachOpExecsRec(const Graph& g,
                       const Column<TShape>* vshape,
                       const Column<int>* vdtype,
+                      const Column<plan_memory::StorageRef>* mem_plan,
                       const Column<int>* vdevice,
                       const Column<vector<uint32_t>>* mutate_index,
                       const Column<shared_ptr<OpExecutor>>* fwd_execs,
                       Column<shared_ptr<OpExecutor>>* execs) {
+  using plan_memory::StorageRef;
+  using plan_memory::kNull;
   static auto& fcreate_layer_op = nnvm::Op::GetAttr<FCreateOpState>("FCreateOpState");
   static auto& is_layer_backward = nnvm::Op::GetAttr<bool>("TIsLayerOpBackward");
   const auto& idx = g.indexed_graph();
@@ -262,6 +262,7 @@ void AttachOpExecsRec(const Graph& g,
       AttachOpExecsRec(*subgraph,
                        vshape->children[nid].get(),
                        vdtype->children[nid].get(),
+                       mem_plan->children[nid].get(),
                        vdevice->children[nid].get(),
                        mutate_index->children[nid].get(),
                        sub_fwd_execs,
@@ -278,7 +279,7 @@ void AttachOpExecsRec(const Graph& g,
           ishape.emplace_back(vshape->value[idx.entry_id(e)]);
           itype.emplace_back(vdtype->value[idx.entry_id(e)]);
         }
-        // TODO(minjie): hack
+        // TODO(minjie): hack for new OperatorState change.
         shared_ptr<Operator> opr;
         auto state = fcreate_layer_op[node->op()](
               node->attrs, context.at(vdevice->value[nid]), ishape, itype);
@@ -301,15 +302,36 @@ void AttachOpExecsRec(const Graph& g,
       } else {
         LOG(INFO) << "FCompute not registered for operator " << node->op()->name;
       }
+      // Setup output requests.
+      OpExecutor* exec = execs->value[nid].get();
+      for (size_t i = 0; i < node->num_outputs(); ++i) {
+        const uint32_t eid = idx.entry_id(nid, i);
+        const StorageRef& store_ref = mem_plan->value[eid];
+        const int storageid = mem_plan->value[eid].storage_id;
+        // Output request.
+        if (false) {
+          // TODO(minjie): addto inplace optimization.
+        } else if (store_ref.inplace_index >= 0) {
+          exec->req.push_back(kWriteInplace);
+        } else if (storageid == kNull) {
+          // TODO(minjie): need double-check.
+          exec->req.push_back(kNullOp);
+        } else {
+          exec->req.push_back(kWriteTo);
+        }
+      }
     }
   }
 }
 
 Graph MXAttachOpExecs(Graph &&graph) {
+  using plan_memory::StorageRef;
+  using plan_memory::ref_key;
   if (graph.node_attrs.count(attach_op::key) == 0) {
     auto ref = graph.CreateNodeColumn<shared_ptr<OpExecutor>>();
     const auto* shapes = graph.entry_attrs.GetColumn<TShape>(shape::key).get();
     const auto* dtypes = graph.entry_attrs.GetColumn<int>(dtype::key).get();
+    const auto* mem_plan = graph.entry_attrs.GetColumn<StorageRef>(ref_key).get();
     const auto* vdevice = graph.node_attrs.GetColumn<int>(ctx::device_key).get();
     const auto* mutate = graph.node_attrs.GetColumn<vector<uint32_t>>(mutate::key).get();
     using FwdExecsType = const Column<shared_ptr<OpExecutor>>*;
@@ -320,6 +342,7 @@ Graph MXAttachOpExecs(Graph &&graph) {
     AttachOpExecsRec(graph,
                      shapes,
                      dtypes,
+                     mem_plan,
                      vdevice,
                      mutate,
                      fwd_execs,
@@ -335,6 +358,7 @@ NNVM_REGISTER_PASS(MXAttachOpExecs)
 .set_change_graph(false)
 .depend_entry_attr(shape::key)
 .depend_entry_attr(dtype::key)
+.depend_entry_attr(plan_memory::ref_key)
 .depend_node_attr(ctx::device_key)
 .depend_global_attr(ctx::ctx_key)
 .depend_node_attr(mutate::key)

@@ -193,8 +193,6 @@ class OpExecutor {
  public:
   /*! \brief output requirement on each array */
   std::vector<OpReqType> req;
-  /*! \brief runtime op context, contains allocated resources */
-  OpContext op_ctx;
   /*! \brief virtual destructor */
   virtual ~OpExecutor() {}
   /*!
@@ -219,18 +217,12 @@ class OpExecutor {
       }
     }
   }
-  /*size_t NumInputs() const {
-    return in_array_.size();
-  }
-  size_t NumOutputs() const {
-    return out_array_.size();
-  }*/
   /*!
-   * \brief run the operator given runtime context on device.
+   * \brief Run the operator with given contexts.
    *  This function call do not synchronize the stream.
-   * \param rctx The runtime context passed in by environment.
+   * \param op_ctx The context passed in by environment.
    */
-  virtual void Run(RunContext rctx) = 0;
+  virtual void Run(const OpContext& op_ctx) = 0;
   /*! \return the execution type */
   virtual ExecType exec_type() const = 0;
  
@@ -245,8 +237,31 @@ class OpExecutor {
   /*! \brief Input and output tblob pointers. */
   std::vector<TBlob*> in_tblob_ptr_, out_tblob_ptr_;
 };
-
 }  // namespace attach_op
+
+namespace cl {
+static const std::string key = "op_closure";
+struct Closure {
+  // The name of the operator
+  std::string opr_name;
+  // the context of the node
+  Context ctx;
+  // The executor
+  std::shared_ptr<attach_op::OpExecutor> exec;
+  // skip the execution of this node
+  bool skip_exec_node{false};
+  // Whether is in training mode.
+  bool is_train{false};
+  // Input and output arrays.
+  std::vector<NDArray> in_array, out_array;
+  // Requested resources.
+  std::vector<Resource> requested;
+  // Engine operator handler.
+  Engine::OprHandle cached_opr{nullptr};
+  // Whether the closure needs to be recreated.
+  bool dirty{true};
+};
+}  // namespace cl
 
 }  // namespace pass
 
