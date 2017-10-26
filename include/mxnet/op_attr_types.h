@@ -262,6 +262,10 @@ using FInferStorageType = std::function<bool (const NodeAttrs& attrs,
                                               std::vector<int>* in_attrs,
                                               std::vector<int>* out_attrs)>;
 
+using FBackwardDependency = std::function<void (const nnvm::Node* fwd_node,
+                                                std::vector<bool>* saved_inputs,
+                                                std::vector<bool>* saved_outputs)>;
+
 }  // namespace mxnet
 
 #endif  // MXNET_OP_ATTR_TYPES_H_

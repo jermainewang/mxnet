@@ -38,6 +38,7 @@ namespace mxnet {
 namespace op {
 void RegisterLegacyOpProp();
 void RegisterLegacyNDFunc();
+void PrepareAllOps();
 }
 const std::vector<std::string> kHiddenKeys = {
   "ctx_group", "lr_mult", "wd_mult", "force_mirroring", "mirror_stage"
@@ -105,6 +106,7 @@ int MXListAllOpNames(nn_uint *out_size,
                      const char ***out_array) {
   mxnet::op::RegisterLegacyOpProp();
   mxnet::op::RegisterLegacyNDFunc();
+  mxnet::op::PrepareAllOps();
   return NNListAllOpNames(out_size, out_array);
 }
 
@@ -112,6 +114,7 @@ int MXSymbolListAtomicSymbolCreators(mx_uint *out_size,
                                      AtomicSymbolCreator **out_array) {
   mxnet::op::RegisterLegacyOpProp();
   mxnet::op::RegisterLegacyNDFunc();
+  mxnet::op::PrepareAllOps();
   return NNListUniqueOps(out_size, out_array);
 }
 

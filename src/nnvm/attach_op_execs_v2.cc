@@ -283,7 +283,6 @@ void AttachOpExecsRec(const Graph& g,
         auto state = fcreate_layer_op[node->op()](
               node->attrs, context.at(vdevice->value[nid]), ishape, itype);
         state.get_state<op::OperatorState>().GiveTo(opr);
-        LOG(INFO) << "opr.get()=" << opr.get();
         const auto* opprop = mxnet::op::OpPropGetOpProperty(node->attrs);
         execs->value[nid] = std::make_shared<ForwardOpExecutor>(opr, opprop, midx);
       } else if (is_layer_backward.get(node->op(), false)) {

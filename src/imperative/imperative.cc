@@ -207,21 +207,39 @@ void Imperative::RecordOp(
   nnvm::NodePtr node = nnvm::Node::Create();
   node->attrs = std::move(attrs);
   node->attrs.name = "node_" + std::to_string(node_count_++);
-  AGInfo& info = AGInfo::Create(node);
-  info.state = state;
-  info.ctx = outputs[0]->ctx();
-
+  node->inputs.resize(inputs.size());
+  // Sanity checks.
+  CHECK(!node->is_variable());
+  // Find which input/output array should be saved.
   if (p_save_inputs == nullptr) {
     p_save_inputs = &(local_buff->save_inputs);
     p_save_outputs = &(local_buff->save_outputs);
-    GetBackwardDependency(
-        node, inputs.size(), outputs.size(), p_save_inputs, p_save_outputs);
+    if (node->is_graph()) {
+      CHECK(node->graph()->global_attrs.count("FBackwardDependency"))
+        << "Cannot differentiate subgraph node \"" << node->attrs.name << "\""
+        << ": its graph has not been specialized for gradient computation.";
+      auto fbwddep = node->graph()->GetGlobalAttr<FBackwardDependency>("FBackwardDependency");
+      fbwddep(node.get(), p_save_inputs, p_save_outputs);
+    } else {
+      //GetBackwardDependency(
+          //node, inputs.size(), outputs.size(), p_save_inputs, p_save_outputs);
+      static auto& fbwddep_map = Op::GetAttr<FBackwardDependency>("FBackwardDependency");
+      CHECK(fbwddep_map.count(node->op()))
+        << "Cannot differentiate node \"" << node->attrs.name << "\""
+        << ": operator \"" << node->op()->name
+        << "\" does not have gradient function registered.";
+      fbwddep_map[node->op()](node.get(), p_save_inputs, p_save_outputs);
+    }
   } else {
-    node->inputs.resize(inputs.size());
+    CHECK_EQ(p_save_inputs->size(), inputs.size());
+    CHECK_EQ(p_save_outputs->size(), outputs.size());
   }
+  const std::vector<bool>& save_inputs = *p_save_inputs;
+  const std::vector<bool>& save_outputs = *p_save_outputs;
 
-  std::vector<bool>& save_inputs = *p_save_inputs;
-  std::vector<bool>& save_outputs = *p_save_outputs;
+  AGInfo& info = AGInfo::Create(node);
+  info.state = state;
+  info.ctx = outputs[0]->ctx();
 
   for (size_t i = 0; i < inputs.size(); ++i) {
     if (AGInfo::IsNone(*(inputs[i]))) {

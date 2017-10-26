@@ -307,10 +307,10 @@ void GraphExecutorV2::Run(const vector<NDArray>& arguments,
   const auto* mem_plan = graph_ptr_->entry_attrs.GetColumn<StorageRef>(
       pass::plan_memory::ref_key).get();
 
-  LOG(INFO) << "Graph execution starts.";
+  DLOG(INFO) << "Graph execution starts.";
 
   // Feed arguments.
-  LOG(INFO) << "Feeding argument ndarrays.";
+  DLOG(INFO) << "Feeding argument ndarrays.";
   CHECK_EQ(arguments.size(), idx.input_nodes().size());
   for (size_t i = 0; i < arguments.size(); ++i) {
     FeedArgArray(arguments[i], i);
@@ -318,7 +318,7 @@ void GraphExecutorV2::Run(const vector<NDArray>& arguments,
   // Feed results.
   CHECK_NOTNULL(results);
   if (!results->empty()) {
-    LOG(INFO) << "Feeding result ndarrays.";
+    DLOG(INFO) << "Feeding result ndarrays.";
     // Result storage is provided. Feed the result array
     // as the output of the related operator.
     CHECK_EQ(results->size(), graph_ptr_->outputs.size());
@@ -349,7 +349,7 @@ void GraphExecutorV2::Run(const vector<NDArray>& arguments,
   }
 
   if (results->empty()) {
-    LOG(INFO) << "Fetching result ndarrays.";
+    DLOG(INFO) << "Fetching result ndarrays.";
     // Result array is not provided. Fetch the output arrays
     // of the graph as the result array.
     for (size_t i = 0; i < graph_ptr_->outputs.size(); ++i) {
@@ -432,9 +432,9 @@ const NDArray& GraphExecutorV2::FetchRstArray(size_t i) {
 }
 
 void GraphExecutorV2::SetupResources() {
-  LOG(INFO) << "Pre-allocating all data entries.";
+  DLOG(INFO) << "Pre-allocating all data entries.";
   SetupDataEntries();
-  LOG(INFO) << "Pre-allocating all operator resources.";
+  DLOG(INFO) << "Pre-allocating all operator resources.";
   SetupOpResources();
 }
 
@@ -478,7 +478,7 @@ void GraphExecutorV2::SetupOpResources() {
 }
 
 void GraphExecutorV2::ResetDataEntries() {
-  LOG(INFO) << "Reset all data entries to allow dynamic allocation.";
+  DLOG(INFO) << "Reset all data entries to allow dynamic allocation.";
   for (size_t i = 0; i < data_entries_.size(); ++i) {
     const NDArray& old = data_entries_[i];
     data_entries_[i] = NDArray(old.shape(), old.ctx(), true, old.dtype());

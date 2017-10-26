@@ -701,7 +701,30 @@ Graph GradientRec(const Graph& fwd_graph,
       return ret;
     };
 
+  FBackwardDependency graph_fbwddep = [grad_g, inent_info, outent_info]
+    (const nnvm::Node* fwd_node, vector<bool>* saved_inputs, vector<bool>* saved_outputs) {
+      CHECK(fwd_node->is_graph());
+      saved_inputs->resize(fwd_node->inputs.size(), false);
+      saved_outputs->resize(fwd_node->num_outputs(), false);
+      for (const auto& info : inent_info) {
+        switch (info.type) {
+        case GradNodeInInfo::kFromGradOut:
+          break;
+        case GradNodeInInfo::kFromFwdOut:
+          (*saved_outputs)[info.index] = true;
+          break;
+        case GradNodeInInfo::kFromFwdIn:
+          (*saved_inputs)[info.index] = true;
+          break;
+        default:
+          LOG(FATAL) << "Cannot differentiate the subgraph.";
+        }
+      }
+    };
+
   new_fwd_graph.global_attrs["FGradient"] = std::make_shared<any>(std::move(graph_fgrad));
+  new_fwd_graph.global_attrs["FBackwardDependency"] =
+    std::make_shared<any>(std::move(graph_fbwddep));
   new_fwd_graph.global_attrs["gradient_graph"] = std::make_shared<any>(grad_g);
   return new_fwd_graph;
 }
@@ -749,6 +772,7 @@ NNVM_REGISTER_PASS(MXGradient)
 .set_change_graph(true)
 .depend_global_attr("mx_gradient_args")
 .provide_global_attr("FGradient")
+.provide_global_attr("FBackwardDependency")
 .provide_global_attr("num_visible_outputs")
 .provide_global_attr("gradient_graph")
 ;

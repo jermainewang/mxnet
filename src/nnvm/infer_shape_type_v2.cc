@@ -84,6 +84,7 @@ class InferAttrPass {
     for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
       DLOG(INFO) << "Infer node#" << nid << idx[nid].source->attrs.name;
       InferOneNode(graph, nid, attr_col, fwd_attr_col);
+      const uint32_t eid = idx.entry_id(nid, 0);
     }
 
     // If this is a forward node and its gradient has been specialized. We
@@ -409,8 +410,8 @@ Graph InferAttrHelper(Graph &&graph,
     attr_col->value[idx.entry_id(idx.input_nodes()[i], 0)] = shape_args[i];
   }
 
-  const Column<AttrType>* fwd_attr_col =
-    graph.GetGlobalAttr<ColumnRef<AttrType>>(fwd_col_name).get();
+  const Column<AttrType>* fwd_attr_col = graph.global_attrs.count(fwd_col_name)?
+    graph.GetGlobalAttr<ColumnRef<AttrType>>(fwd_col_name).get() : nullptr;
 
   // Get variable shapes.
   if (graph.global_attrs.count(attr_key_name) != 0) {
@@ -466,7 +467,6 @@ NNVM_REGISTER_PASS(MXInferShape)
 .set_body(MXInferShape)
 .set_change_graph(false)
 .depend_global_attr("shape_inputs")
-.depend_global_attr("forward_shapes")
 .provide_entry_attr("shape");
 
 Graph MXInferShapeAPI(Graph &&graph) {

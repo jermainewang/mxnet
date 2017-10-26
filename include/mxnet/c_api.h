@@ -2005,6 +2005,9 @@ MXNET_DLL int MXGraphSpecialize(GraphHandle graph,
                                 mx_uint num_param,
                                 const char **keys,
                                 const char **vals);
+MXNET_DLL int MXGraphSpecializeByNDArrays(GraphHandle graph,
+                                          int num_arrays,
+                                          NDArrayHandle *arrays);
 MXNET_DLL int MXGraphTransform(GraphHandle graph,
                                mx_uint num_passes,
                                const char **passes,

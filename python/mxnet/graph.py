@@ -99,6 +99,14 @@ class Graph(object):
             mx_uint(len(keys)),
             keys, vals))
 
+    def specialize_by_ndarray(self, arrays):
+        hdls = [arr.handle if arr is not None else None for arr in arrays]
+        check_call(_LIB.MXGraphSpecializeByNDArrays(
+            self._handle,
+            mx_uint(len(arrays)),
+            c_array(NDArrayHandle, hdls)))
+
+
     def transform(self, pass_names, **kwargs):
         assert not self._freezed, \
                 'The graph cannot be changed after a GraphSymbol is created.'
