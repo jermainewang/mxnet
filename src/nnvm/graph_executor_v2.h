@@ -12,12 +12,15 @@
 namespace mxnet {
 namespace exec {
 
+struct Closure;
+
 // TODO(minjie):
 // * Bulk Execution
 // * DetectInplaceAddTo
 // * Multi-devices, Data Parallelism
 class GraphExecutorV2 {
  public:
+  typedef nnvm::ColumnRef<std::shared_ptr<OpExecutorV2>> ExecState;
   struct Config {
     bool dynamic_allocation{true};
     bool zero_copy{false};
@@ -29,6 +32,7 @@ class GraphExecutorV2 {
   };
 
   GraphExecutorV2(std::shared_ptr<const nnvm::Graph> graph,
+                  const ExecState& fwd_state = ExecState(),
                   const Config& config = Config());
 
   ~GraphExecutorV2();
@@ -39,9 +43,15 @@ class GraphExecutorV2 {
 
   const std::vector<std::string>& RequiredGraphAttrs() const;
 
+  // XXX(minjie): Note that once this is called, one must make sure that
+  // the GraphExecutor will not be used any more. Otherwise,
+  // the returned state may be polluted.
+  const ExecState& GetState() const { return op_execs_; }
+
   const nnvm::Graph& graph() const { return *graph_ptr_; }
 
  private:
+  void AttachOps(const ExecState& fwd_state);
   void SetupResources();
   void SetupOpResources();
   void SetupDataEntries();
@@ -59,8 +69,10 @@ class GraphExecutorV2 {
   const Config config_;
   // Attributes required for graph evaluation.
   const std::vector<std::string> required_graph_ptr_attrs_;
-  // Operator nodes.
-  nnvm::Column<pass::cl::Closure>* closures_;
+
+  nnvm::ColumnRef<std::shared_ptr<OpExecutorV2>> op_execs_;
+  // Internal data structure for executing each node.
+  nnvm::ColumnRef<Closure> closures_;
 
   // Data entries.
   std::vector<NDArray> data_entries_;

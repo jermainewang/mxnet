@@ -268,7 +268,8 @@ int MXExecV2Create(GraphHandle ghdl,
   kwargs_any["context"] = std::make_shared<any>(std::move(ctx));
   nnvm::Specialize(pg.get(), kwargs_any);
 
-  GraphExecutorV2* exec = new GraphExecutorV2(pg, cfg);
+  GraphExecutorV2::ExecState fwd_state;
+  GraphExecutorV2* exec = new GraphExecutorV2(pg, fwd_state, cfg);
   API_BEGIN();
   *out = exec;
   API_END_HANDLE_ERROR(delete exec;);
@@ -309,6 +310,8 @@ int MXExecV2Run(GraphExecutorV2Handle ehdl,
   GraphExecutorV2::RunOption opt;
   opt.is_train = (is_training == 1);
   exec->Run(arguments, &results, opt);
+  //TODO(state)
+  //exec->GetState();
 
   if (Imperative::Get()->is_recording()) {
     NodeAttrs attrs;

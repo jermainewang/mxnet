@@ -11,21 +11,41 @@ using namespace nnvm;
 namespace mxnet {
 namespace exec {
 
-using OpExecutor = pass::attach_op::OpExecutor;
 using StorageRef = pass::plan_memory::StorageRef;
-using Closure = pass::cl::Closure;
+
+struct Closure {
+  // The name of the operator
+  std::string opr_name;
+  // the context of the node
+  Context ctx;
+  // The executor
+  std::shared_ptr<OpExecutorV2> exec;
+  // skip the execution of this node
+  bool skip_exec_node{false};
+  // Whether is in training mode.
+  bool is_train{false};
+  // Input and output arrays.
+  std::vector<NDArray> in_array, out_array;
+  // Requested resources.
+  std::vector<Resource> requested;
+  // Engine operator handler.
+  Engine::OprHandle cached_opr{nullptr};
+  // Whether the closure needs to be recreated.
+  bool dirty{true};
+};
 
 // Internal data structure used for creating
 // engine operators.
 namespace {
 vector<string> _InitRequiredGraphAttrs() {
-  return {pass::shape::key,
-          pass::dtype::key,
-          pass::ctx::device_key,
-          pass::ctx::ctx_key,
-          pass::plan_memory::ref_key,
-          pass::plan_memory::storage_key,
-          pass::attach_op::key};
+  using namespace pass;
+  return {shape::key,
+          dtype::key,
+          ctx::device_key,
+          ctx::ctx_key,
+          plan_memory::ref_key,
+          plan_memory::storage_key,
+          mutate::key};
 }
 void _CheckAllAttrsExist(const Graph& graph, const vector<string>& required) {
   for (const auto& attr : required) {
@@ -183,6 +203,41 @@ void SetupClosure(const Graph& graph,
   cl->dirty = false;
 }
 
+void AttachOpClosuresRec(const Graph& graph,
+                         const Column<shared_ptr<OpExecutorV2>>* op_execs,
+                         const Column<int>* vdevice,
+                         const Column<StorageRef>* mem_plan,
+                         Column<Closure>* closures) {
+  const auto& idx = graph.indexed_graph();
+  const auto& context = graph.GetGlobalAttr<vector<Context>>(pass::ctx::ctx_key);
+  for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
+    Closure& cl = closures->value[nid];
+    const Node* node = idx[nid].source;
+    if (node->is_variable()) {
+      continue;
+    }
+    cl.opr_name = node->op()->name;
+    if (node->is_graph()) {
+      // XXX(minjie): Note that subgraph operator closures are currently never reused.
+      // To reuse them, one must make sure the OpExecutorV2 can be reused.
+      // See attach_op_exec_pass_v2.cc
+      auto subgraph = node->graph();
+      auto subref = subgraph->CreateNodeColumn<Closure>();
+      AttachOpClosuresRec(*subgraph,
+                          op_execs->children[nid].get(),
+                          vdevice->children[nid].get(),
+                          mem_plan->children[nid].get(),
+                          subref.CopyOnWrite());
+      closures->children[nid] = subref;
+    } else {
+      cl.in_array.resize(node->inputs.size());
+      cl.out_array.resize(node->num_outputs());
+      cl.exec = op_execs->value[nid];
+      cl.ctx = context.at(vdevice->value[nid]);
+    }
+  }
+}
+
 // Check all operator closures and re-make those dirty ones.
 void SetupClosureRec(const Graph& graph,
                      const vector<NDArray>& data_pool,
@@ -199,7 +254,7 @@ void SetupClosureRec(const Graph& graph,
       continue;
     } else if (node->is_graph()) {
       // XXX(minjie): Note that subgraph operator closures are currently never reused.
-      // To reuse them, one must make sure the OpExecutor can be reused.
+      // To reuse them, one must make sure the OpExecutorV2 can be reused.
       // See attach_op_exec_pass_v2.cc
       SetupClosureRec(*node->graph(),
                       data_pool,
@@ -222,21 +277,47 @@ void SetupClosureRec(const Graph& graph,
 }  // namespace
 
 GraphExecutorV2::GraphExecutorV2(shared_ptr<const Graph> graph,
+                                 const GraphExecutorV2::ExecState& fwd_state,
                                  const GraphExecutorV2::Config& config)
   :graph_ptr_(graph), config_(config),
    required_graph_ptr_attrs_(_InitRequiredGraphAttrs()) {
   _CheckAllAttrsExist(*graph_ptr_, required_graph_ptr_attrs_);
+  AttachOps(fwd_state);
   SetupResources();
 }
 
 GraphExecutorV2::~GraphExecutorV2() {
   const auto& idx = graph_ptr_->indexed_graph();
   for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
-    Closure& cl = closures_->value[nid];
+    Closure& cl = closures_.CopyOnWrite()->value[nid];
     if (cl.cached_opr) {
       Engine::Get()->DeleteOperator(cl.cached_opr);
     }
   }
+}
+
+void GraphExecutorV2::AttachOps(const GraphExecutorV2::ExecState& fwd_state) {
+  using namespace pass;
+  op_execs_ = graph_ptr_->CreateNodeColumn<shared_ptr<OpExecutorV2>>();
+  const auto* shapes = graph_ptr_->entry_attrs.GetColumn<TShape>(shape::key).get();
+  const auto* dtypes = graph_ptr_->entry_attrs.GetColumn<int>(dtype::key).get();
+  const auto* mem_plan = graph_ptr_->entry_attrs.GetColumn<StorageRef>(plan_memory::ref_key).get();
+  const auto* vdevice = graph_ptr_->node_attrs.GetColumn<int>(ctx::device_key).get();
+  const auto* mutate = graph_ptr_->node_attrs.GetColumn<vector<uint32_t>>(mutate::key).get();
+  AttachOpExecsRec(*graph_ptr_,
+                   shapes,
+                   dtypes,
+                   mem_plan,
+                   vdevice,
+                   mutate,
+                   fwd_state.get(),
+                   op_execs_.CopyOnWrite());
+  closures_ = graph_ptr_->CreateNodeColumn<Closure>();
+  AttachOpClosuresRec(*graph_ptr_,
+                      op_execs_.get(),
+                      vdevice,
+                      mem_plan,
+                      closures_.CopyOnWrite());
 }
 
 void GraphExecutorV2::Run(const vector<NDArray>& arguments,
@@ -274,7 +355,7 @@ void GraphExecutorV2::Run(const vector<NDArray>& arguments,
                   shapes,
                   dtypes,
                   mem_plan,
-                  closures_);
+                  closures_.CopyOnWrite());
   
   if (results->empty()) {
     DLOG(INFO) << "Fetching result ndarrays.";
@@ -302,7 +383,7 @@ void GraphExecutorV2::Run(const vector<NDArray>& arguments,
       // TODO(minjie): subgraph node.
       LOG(FATAL) << "Not implemented.";
     } else {
-      Closure& cl = closures_->value[nid];
+      Closure& cl = closures_.CopyOnWrite()->value[nid];
       if (cl.skip_exec_node) continue;
       if (cl.exec->exec_type() == ExecType::kCrossDeviceCopy) {
         CHECK_EQ(node->inputs.size(), 1U);
@@ -338,19 +419,17 @@ void GraphExecutorV2::FeedArgArray(const NDArray& array, size_t i) {
   for (const OpInputEntry& ent : arg_to_op_input_[i]) {
     const uint32_t nid = ent.first;
     const size_t i = ent.second;
-    closures_->value[nid].in_array[i] = array;
-    closures_->value[nid].dirty = true;
+    closures_.CopyOnWrite()->value[nid].in_array[i] = array;
+    closures_.CopyOnWrite()->value[nid].dirty = true;
   }
 }
 
 void GraphExecutorV2::FeedRstArray(const NDArray& array, size_t i) {
   const auto& idx = graph_ptr_->indexed_graph();
-  const auto& op_execs = graph_ptr_->node_attrs.GetColumn<shared_ptr<OpExecutor>>(
-      pass::attach_op::key);
   const NodeEntry& outent = graph_ptr_->outputs[i];
   const uint32_t nid = idx.node_id(outent.node.get());
-  closures_->value[nid].out_array[outent.index] = array;
-  closures_->value[nid].dirty = true;
+  closures_.CopyOnWrite()->value[nid].out_array[outent.index] = array;
+  closures_.CopyOnWrite()->value[nid].dirty = true;
 }
 
 const NDArray& GraphExecutorV2::FetchRstArray(size_t i) {
@@ -426,7 +505,7 @@ void GraphExecutorV2::SetupDataEntries() {
 void GraphExecutorV2::ResetClosure(uint32_t nid) {
   const auto& idx = graph_ptr_->indexed_graph();
   const Node* node = idx[nid].source;
-  Closure& cl = closures_->value[nid];
+  Closure& cl = closures_.CopyOnWrite()->value[nid];
   cl.in_array.clear();
   cl.in_array.resize(node->inputs.size());
   cl.out_array.clear();
