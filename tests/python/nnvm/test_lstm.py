@@ -55,6 +55,7 @@ class LSTM(Block):
         N, _ = data[0].shape
         h = nd.zeros((N, self.hidden_size), ctx=ctx)
         c = nd.zeros((N, self.hidden_size), ctx=ctx)
+        w = nd.zeros((self.input_size, self.hidden_size), ctx=ctx)
         states = [h, c]
         outputs = []
         for t in range(len(data)):
@@ -97,10 +98,11 @@ def test_lstm():
     lstm.collect_params().initialize(ctx=ctx)
     for i in range(20):
         t0 = time.time()
-        #loss = lstm(data)
-        with autograd.record():
-            loss = lstm(data)
-            loss.backward()
+        loss = lstm(data)
+        #with autograd.record():
+            #loss = lstm(data)
+            #loss.backward()
+        loss.wait_to_read()
         print('Iter #%d, takes %fs' % (i, (time.time() - t0)))
 
 if __name__ == '__main__':

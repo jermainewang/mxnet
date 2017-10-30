@@ -25,6 +25,7 @@ kwargs = {}
 if "--inplace" in sys.argv:
     from distutils.core import setup
     from distutils.extension import Extension
+    sys.argv.remove('--inplace')
 else:
     from setuptools import setup
     from setuptools.extension import Extension
@@ -80,8 +81,8 @@ def config_cython():
             library_dirs = ['mxnet', '../build/Release', '../build']
             libraries = ['libmxnet']
         else:
-            library_dirs = None
-            libraries = None
+            library_dirs = ['../lib']
+            libraries = ['mxnet']
 
         for fn in os.listdir(path):
             if not fn.endswith(".pyx"):

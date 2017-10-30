@@ -15,7 +15,6 @@ namespace exec {
 struct Closure;
 
 // TODO(minjie):
-// * Bulk Execution
 // * DetectInplaceAddTo
 // * Multi-devices, Data Parallelism
 class GraphExecutorV2 {
@@ -24,6 +23,7 @@ class GraphExecutorV2 {
   struct Config {
     bool dynamic_allocation{true};
     bool zero_copy{false};
+    bool bulk_execution{true};
     Config() {}
   };
   struct RunOption {
@@ -51,26 +51,33 @@ class GraphExecutorV2 {
   const nnvm::Graph& graph() const { return *graph_ptr_; }
 
  private:
-  void AttachOps(const ExecState& fwd_state);
+  void AttachOps();
   void SetupResources();
   void SetupOpResources();
   void SetupDataEntries();
+  void CheckAllowBulkExec() const;
 
   void FeedArgArray(const NDArray& array, size_t i);
   void FeedRstArray(const NDArray& array, size_t i);
   const NDArray& FetchRstArray(size_t i);
 
+  void RunOps();
+  void RunOpsInBulk();
+
   void ResetDataEntries();
-  void ResetClosure(uint32_t nid);
 
  private:
   // The graph to be evaluated.
   std::shared_ptr<const nnvm::Graph> graph_ptr_;
+  // Configurations of this executor.
   const Config config_;
+  // OpExecutors of forward graph.
+  const ExecState fwd_execs_;
   // Attributes required for graph evaluation.
   const std::vector<std::string> required_graph_ptr_attrs_;
 
-  nnvm::ColumnRef<std::shared_ptr<OpExecutorV2>> op_execs_;
+  // Internal (stateful) operator executors.
+  ExecState op_execs_;
   // Internal data structure for executing each node.
   nnvm::ColumnRef<Closure> closures_;
 

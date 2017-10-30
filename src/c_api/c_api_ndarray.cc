@@ -148,9 +148,9 @@ void MXImperativeInvokeImpl(AtomicSymbolCreator creator,
       num_outputs, infered_num_outputs, num_visible_outputs, outputs);
 
   auto state = Imperative::Get()->Invoke(Context::CPU(), attrs, ndinputs, ndoutputs);
-  if (Imperative::Get()->is_recording()) {
-    Imperative::Get()->RecordOp(std::move(attrs), ndinputs, ndoutputs, state);
-  }
+  //if (Imperative::Get()->is_recording()) {
+    //Imperative::Get()->RecordOp(std::move(attrs), ndinputs, ndoutputs, state);
+  //}
 
   for (int i = *num_outputs; i < infered_num_outputs; ++i) delete ndoutputs[i];
 

@@ -18,18 +18,12 @@ struct Closure {
   std::string opr_name;
   // the context of the node
   Context ctx;
-  // The executor
-  std::shared_ptr<OpExecutorV2> exec;
-  // skip the execution of this node
-  bool skip_exec_node{false};
   // Whether is in training mode.
   bool is_train{false};
   // Input and output arrays.
   std::vector<NDArray> in_array, out_array;
   // Requested resources.
   std::vector<Resource> requested;
-  // Engine operator handler.
-  Engine::OprHandle cached_opr{nullptr};
   // Whether the closure needs to be recreated.
   bool dirty{true};
 };
@@ -74,7 +68,8 @@ void SetupClosure(const Graph& graph,
 
   const auto& idx = graph.indexed_graph();
   const Node* node = idx[nid].source;
-  auto exec = cl->exec;
+
+  cl->dirty = false;
 
   CHECK_EQ(node->inputs.size(), cl->in_array.size());
   CHECK_EQ(node->num_outputs(), cl->out_array.size());
@@ -89,13 +84,13 @@ void SetupClosure(const Graph& graph,
           shapes->value[eid], dtypes->value[eid]);
     } else if (storageid == kExternalStorageID) {
       CHECK(!cl->in_array[i].is_none());
-      const auto& array = cl->in_array[i];
-      CHECK_EQ(shapes->value[eid], array.shape())
-        << "Shape mismatch: expect " << shapes->value[eid]
-        << " provided " << array.shape();
-      CHECK_EQ(dtypes->value[eid], array.dtype())
-        << "DType mismatch: expect " << dtypes->value[eid]
-        << " provided " << array.dtype();
+      //const auto& array = cl->in_array[i];
+      //CHECK_EQ(shapes->value[eid], array.shape())
+        //<< "Shape mismatch: expect " << shapes->value[eid]
+        //<< " provided " << array.shape();
+      //CHECK_EQ(dtypes->value[eid], array.dtype())
+        //<< "DType mismatch: expect " << dtypes->value[eid]
+        //<< " provided " << array.dtype();
     } else {
       LOG(FATAL) << "Cannot create ndarray for entry#" << eid
         << " with provided shape=" << shapes->value[eid]
@@ -111,13 +106,13 @@ void SetupClosure(const Graph& graph,
           shapes->value[eid], dtypes->value[eid]);
     } else if (storageid == kExternalStorageID) {
       CHECK(!cl->out_array[i].is_none());
-      const auto& array = cl->out_array[i];
-      CHECK_EQ(shapes->value[eid], array.shape())
-        << "Shape mismatch: expect " << shapes->value[eid]
-        << " provided " << array.shape();
-      CHECK_EQ(dtypes->value[eid], array.dtype())
-        << "DType mismatch: expect " << dtypes->value[eid]
-        << " provided " << array.dtype();
+      //const auto& array = cl->out_array[i];
+      //CHECK_EQ(shapes->value[eid], array.shape())
+        //<< "Shape mismatch: expect " << shapes->value[eid]
+        //<< " provided " << array.shape();
+      //CHECK_EQ(dtypes->value[eid], array.dtype())
+        //<< "DType mismatch: expect " << dtypes->value[eid]
+        //<< " provided " << array.dtype();
     } else if (storageid == kNull) {
       // TODO(minjie): Context for null output?
       cl->out_array[i] = NDArray(shapes->value[eid],
@@ -134,73 +129,73 @@ void SetupClosure(const Graph& graph,
     // Allocate op resources.
     auto reqs = fresource[node->op()](node->attrs);
     auto& requested = cl->requested;
-    requested.clear();
     // Get the resource of temporal space.
     for (const ResourceRequest& req : reqs) {
       requested.push_back(ResourceManager::Get()->Request(cl->ctx, req));
     }
   }
+}
 
-  // Execution functor.
-  const Closure& capture = *cl;
-  auto exec_fun = [capture] (
-      RunContext ctx, Engine::CallbackOnComplete on_complete) {
-    auto exec = capture.exec;
-    const bool is_async = exec->exec_type() == ExecType::kAsync;
-    const bool is_gpu = capture.ctx.dev_mask() == gpu::kDevMask;
-    OpContext op_ctx;
-    if (is_async) {
-      op_ctx.async_on_complete = on_complete;
-    }
-    op_ctx.is_train = capture.is_train;
-    op_ctx.run_ctx = ctx;
-    op_ctx.requested = std::move(capture.requested);
-    exec->Setup(capture.in_array, capture.out_array);
-    exec->Run(op_ctx);
-    // call on complete only if it is async op
-    if (!is_async) {
-      if (is_gpu) {
+inline void EngineAsyncFn(
+    const Closure& cl,
+    shared_ptr<OpExecutorV2> exec,
+    RunContext ctx,
+    Engine::CallbackOnComplete on_complete) {
+  const bool is_async = exec->exec_type() == ExecType::kAsync;
+  const bool is_gpu = cl.ctx.dev_mask() == gpu::kDevMask;
+  OpContext op_ctx{cl.is_train, ctx, on_complete, cl.requested};
+  exec->Setup(cl.in_array, cl.out_array);
+  exec->Run(op_ctx);
+  // call on complete only if it is async op
+  if (!is_async) {
+    if (is_gpu) {
 #if MXNET_USE_CUDA
-        // Wait GPU kernel to finish.
-        ctx.get_stream<gpu>()->Wait();
+      // Wait GPU kernel to finish.
+      ctx.get_stream<gpu>()->Wait();
 #else
-        LOG(FATAL) << MXNET_GPU_NOT_ENABLED_ERROR;
+      LOG(FATAL) << MXNET_GPU_NOT_ENABLED_ERROR;
 #endif
-      }
-      on_complete();
     }
+    on_complete();
+  }
+}
+
+inline Engine::AsyncFn CreateEngineAsyncFn(
+    const Closure& cl, shared_ptr<OpExecutorV2> exec) {
+  // Execution functor.
+  return [cl, exec] (RunContext ctx, Engine::CallbackOnComplete on_complete) {
+    EngineAsyncFn(cl, exec, ctx, on_complete);
   };
-  // Setup variables
-  std::vector<Engine::VarHandle> use_vars, mutate_vars;
-  for (size_t i = 0; i < cl->in_array.size(); ++i) {
-    use_vars.push_back(cl->in_array[i].var());
+}
+
+void CreateReadWriteVar(const Closure& cl, 
+                        vector<Engine::VarHandle>* use_vars,
+                        vector<Engine::VarHandle>* mutate_vars) {
+  use_vars->clear();
+  mutate_vars->clear();
+  for (size_t i = 0; i < cl.in_array.size(); ++i) {
+    use_vars->push_back(cl.in_array[i].var());
   }
-  for (auto& r : cl->requested) {
-    mutate_vars.push_back(r.var);
+  for (auto& r : cl.requested) {
+    mutate_vars->push_back(r.var);
   }
-  for (size_t i = 0; i < cl->out_array.size(); ++i) {
-    if (!cl->out_array[i].is_none()) {
-      mutate_vars.push_back(cl->out_array[i].var());
+  for (size_t i = 0; i < cl.out_array.size(); ++i) {
+    if (!cl.out_array[i].is_none()) {
+      mutate_vars->push_back(cl.out_array[i].var());
     }
   }
-  /*ostringstream oss;
-  oss << "Read: [";
-  for (const auto& v : use_vars) {
-    oss << v << " ";
-  }
-  oss << "] Write: [";
-  for (const auto& v : mutate_vars) {
-    oss << v << " ";
-  }
-  oss << "]";
-  LOG(INFO) << oss.str();*/
   // Remove dupliated vars.
-  Engine::Get()->DeduplicateVarHandle(&use_vars, &mutate_vars);
-  // Save everything.
-  cl->cached_opr = Engine::Get()->NewOperator(
-      exec_fun, use_vars, mutate_vars, FnProperty::kNormal,
+  Engine::Get()->DeduplicateVarHandle(use_vars, mutate_vars);
+}
+
+inline Engine::OprHandle CreateCachedOpr(
+    const Closure& cl, shared_ptr<OpExecutorV2> exec) {
+  // Setup variables
+  vector<Engine::VarHandle> use_vars, mutate_vars;
+  CreateReadWriteVar(cl, &use_vars, &mutate_vars);
+  return Engine::Get()->NewOperator(
+      CreateEngineAsyncFn(cl, exec), use_vars, mutate_vars, FnProperty::kNormal,
       PROFILER_MESSAGE(closures_[nid].opr_name));
-  cl->dirty = false;
 }
 
 void AttachOpClosuresRec(const Graph& graph,
@@ -232,7 +227,6 @@ void AttachOpClosuresRec(const Graph& graph,
     } else {
       cl.in_array.resize(node->inputs.size());
       cl.out_array.resize(node->num_outputs());
-      cl.exec = op_execs->value[nid];
       cl.ctx = context.at(vdevice->value[nid]);
     }
   }
@@ -274,29 +268,55 @@ void SetupClosureRec(const Graph& graph,
     }
   }
 }
+void ResetClosure(const Node* node, Closure* cl) {
+  cl->in_array.clear();
+  cl->in_array.resize(node->inputs.size());
+  cl->out_array.clear();
+  cl->out_array.resize(node->num_outputs());
+  cl->requested.clear();  // TODO(minjie): how to reclaim the requested resources?
+  cl->dirty = true;
+}
 }  // namespace
 
 GraphExecutorV2::GraphExecutorV2(shared_ptr<const Graph> graph,
                                  const GraphExecutorV2::ExecState& fwd_state,
                                  const GraphExecutorV2::Config& config)
-  :graph_ptr_(graph), config_(config),
-   required_graph_ptr_attrs_(_InitRequiredGraphAttrs()) {
+  : graph_ptr_(graph), config_(config), fwd_execs_(fwd_state),
+    required_graph_ptr_attrs_(_InitRequiredGraphAttrs()) {
   _CheckAllAttrsExist(*graph_ptr_, required_graph_ptr_attrs_);
-  AttachOps(fwd_state);
+  //AttachOps();
   SetupResources();
+  //if (config_.bulk_execution) {
+    //CheckAllowBulkExec();
+  //}
 }
 
 GraphExecutorV2::~GraphExecutorV2() {
+}
+
+void GraphExecutorV2::CheckAllowBulkExec() const {
+  using namespace pass;
   const auto& idx = graph_ptr_->indexed_graph();
+  const auto* vdevice = graph_ptr_->node_attrs.GetColumn<int>(ctx::device_key).get();
   for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
-    Closure& cl = closures_.CopyOnWrite()->value[nid];
-    if (cl.cached_opr) {
-      Engine::Get()->DeleteOperator(cl.cached_opr);
+    const Node* node = idx[nid].source;
+    if (node->is_variable()) {
+      continue;
+    } else if (node->is_graph()) {
+      continue;
+    } else {
+      CHECK_EQ(vdevice->value[nid], vdevice->value[0])
+        << "Bulk execution is NOT allowed when some nodes in the graph are"
+        << " assigned to different devices.";
+      CHECK(op_execs_->value[nid]->exec_type() != ExecType::kCrossDeviceCopy
+          && op_execs_->value[nid]->exec_type() != ExecType::kAsync)
+        << "Bulk execution is NOT allowed when some nodes in the graph are"
+        << " asynchronous.";
     }
   }
 }
 
-void GraphExecutorV2::AttachOps(const GraphExecutorV2::ExecState& fwd_state) {
+void GraphExecutorV2::AttachOps() {
   using namespace pass;
   op_execs_ = graph_ptr_->CreateNodeColumn<shared_ptr<OpExecutorV2>>();
   const auto* shapes = graph_ptr_->entry_attrs.GetColumn<TShape>(shape::key).get();
@@ -310,7 +330,7 @@ void GraphExecutorV2::AttachOps(const GraphExecutorV2::ExecState& fwd_state) {
                    mem_plan,
                    vdevice,
                    mutate,
-                   fwd_state.get(),
+                   fwd_execs_.get(),
                    op_execs_.CopyOnWrite());
   closures_ = graph_ptr_->CreateNodeColumn<Closure>();
   AttachOpClosuresRec(*graph_ptr_,
@@ -323,10 +343,11 @@ void GraphExecutorV2::AttachOps(const GraphExecutorV2::ExecState& fwd_state) {
 void GraphExecutorV2::Run(const vector<NDArray>& arguments,
                           vector<NDArray>* results,
                           const RunOption& option) {
+  // TODO(minjie): currently use new operators for each run.
+  AttachOps();
+
   const auto& idx = graph_ptr_->indexed_graph();
-
   DLOG(INFO) << "Graph execution starts.";
-
   // Feed arguments.
   DLOG(INFO) << "Feeding argument ndarrays.";
   CHECK_EQ(arguments.size(), idx.input_nodes().size());
@@ -373,9 +394,17 @@ void GraphExecutorV2::Run(const vector<NDArray>& arguments,
     ResetDataEntries();
   }
 
-  // Schedule everything to run.
+  if (config_.bulk_execution) {
+    RunOpsInBulk();
+  } else {
+    RunOps();
+  }
+}
+
+void GraphExecutorV2::RunOps() {
+  const auto& idx = graph_ptr_->indexed_graph();
+  vector<Engine::VarHandle> use_vars, mutate_vars;
   for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
-    // Normal mode
     const Node* node = idx[nid].source;
     if (node->is_variable()) {
       continue;
@@ -384,13 +413,20 @@ void GraphExecutorV2::Run(const vector<NDArray>& arguments,
       LOG(FATAL) << "Not implemented.";
     } else {
       Closure& cl = closures_.CopyOnWrite()->value[nid];
-      if (cl.skip_exec_node) continue;
-      if (cl.exec->exec_type() == ExecType::kCrossDeviceCopy) {
+      auto exec = op_execs_.CopyOnWrite()->value[nid];
+      if (exec->exec_type() == ExecType::kCrossDeviceCopy) {
         CHECK_EQ(node->inputs.size(), 1U);
         CHECK_EQ(cl.in_array.size(), 1U);
         CHECK_EQ(cl.out_array.size(), 1U);
         CopyFromTo(cl.in_array[0], &(cl.out_array[0]));
-      } else if (cl.cached_opr != nullptr) {
+      } else {
+        Engine::AsyncFn fn = CreateEngineAsyncFn(cl, exec);
+        CreateReadWriteVar(cl, &use_vars, &mutate_vars);
+        Engine::Get()->PushAsync(fn, cl.ctx, use_vars, mutate_vars, FnProperty::kNormal, 0,
+            PROFILER_MESSAGE(cl.opr_name));
+      }
+      /* TODO(minjie): cached opr mode
+        else if (cl.cached_opr != nullptr) {
 #if MXNET_USE_PROFILER
         bool profiling = engine::Profiler::Get()->GetState() == engine::Profiler::kRunning;
 #else
@@ -401,15 +437,79 @@ void GraphExecutorV2::Run(const vector<NDArray>& arguments,
       } else {
         LOG(FATAL) << "Cannot execute Node#" << nid << " " << node->attrs.name;
       }
+        */
       if (config_.dynamic_allocation) {
-        ResetClosure(nid);
+        ResetClosure(node, &cl);
       }
     }
-    // TODO(minjie): Monitor callbacks
-    //if (monitor_callback_) {
-      //ExecuteMonCallback(nid);
-    //}
   }
+}
+
+void GraphExecutorV2::RunOpsInBulk() {
+  const auto& idx = graph_ptr_->indexed_graph();
+  uint32_t first_non_var_nid = 0;
+  for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
+    const Node* node = idx[nid].source;
+    if (!node->is_variable()) {
+      first_non_var_nid = nid;
+      break;
+    }
+  }
+  const Context& bulkctx = closures_->value[first_non_var_nid].ctx;
+  const bool is_train = closures_->value[first_non_var_nid].is_train;
+  const bool is_gpu = bulkctx.dev_mask() == gpu::kDevMask;
+  std::vector<Engine::VarHandle> use_vars, mutate_vars;
+  for (const auto& op_inent : arg_to_op_input_) {
+    const uint32_t nid = op_inent[0].first;
+    const size_t index = op_inent[0].second;
+    const NDArray& nd = closures_->value[nid].in_array[index];
+    use_vars.push_back(nd.var());
+  }
+  for (const auto& ent : idx.outputs()) {
+    const NDArray& nd = closures_->value[ent.node_id].out_array[ent.index];
+    mutate_vars.push_back(nd.var());
+  }
+  Engine::Get()->DeduplicateVarHandle(&use_vars, &mutate_vars);
+  // TODO(minjie): how about temporary resources?
+  shared_ptr<const Graph> graph = graph_ptr_;
+  const Config& cfg = config_;
+  // Note: use move to clear the reference of the closures and op_execs.
+  ColumnRef<Closure> closures = std::move(closures_);
+  ExecState op_execs = std::move(op_execs_);
+  auto fn = [graph, op_execs, closures, cfg, is_gpu, is_train] 
+    (RunContext ctx, Engine::CallbackOnComplete on_complete) mutable {
+    const auto& idx = graph->indexed_graph();
+    OpContext op_ctx{is_train, ctx, on_complete, {}};
+    for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
+      const Node* node = idx[nid].source;
+      if (node->is_variable()) {
+        continue;
+      } else if (node->is_graph()) {
+        // TODO(minjie): subgraph node.
+        LOG(FATAL) << "Not implemented.";
+      } else {
+        Closure& cl = closures.CopyOnWrite()->value[nid];
+        auto exec = op_execs.CopyOnWrite()->value[nid];
+        exec->Setup(cl.in_array, cl.out_array);
+        op_ctx.requested = cl.requested;
+        exec->Run(op_ctx);
+        if (cfg.dynamic_allocation) {
+          ResetClosure(node, &cl);
+        }
+      }
+    }
+    if (is_gpu) {
+#if MXNET_USE_CUDA
+      // Wait GPU kernel to finish.
+      ctx.get_stream<gpu>()->Wait();
+#else
+      LOG(FATAL) << MXNET_GPU_NOT_ENABLED_ERROR;
+#endif
+    }
+    on_complete();
+  };
+  Engine::Get()->PushAsync(fn, bulkctx, use_vars, mutate_vars, FnProperty::kNormal, 0,
+      PROFILER_MESSAGE("bulk-execution"));
 }
   
 void GraphExecutorV2::FeedArgArray(const NDArray& array, size_t i) {
@@ -501,19 +601,6 @@ void GraphExecutorV2::SetupDataEntries() {
                << " size=" << nword << " floats.";
     data_entries_.push_back(NDArray(shape, context.at(st.device_id), delay_alloc));
   }
-}
-void GraphExecutorV2::ResetClosure(uint32_t nid) {
-  const auto& idx = graph_ptr_->indexed_graph();
-  const Node* node = idx[nid].source;
-  Closure& cl = closures_.CopyOnWrite()->value[nid];
-  cl.in_array.clear();
-  cl.in_array.resize(node->inputs.size());
-  cl.out_array.clear();
-  cl.out_array.resize(node->num_outputs());
-  cl.requested.clear();  // TODO(minjie): how to reclaim the requested resources?
-  cl.dirty = true;
-  Engine::Get()->DeleteOperator(cl.cached_opr);
-  cl.cached_opr = nullptr;
 }
 }  // namespace exec
 }  // namespace mxnet
