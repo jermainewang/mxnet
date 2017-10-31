@@ -2030,6 +2030,12 @@ MXNET_DLL int MXGraphCreateInputArrays(GraphHandle graph,
 MXNET_DLL int MXGraphCreateOutputArrays(GraphHandle graph,
                                         int *num_outputs,
                                         NDArrayHandle **out_arrays);
+MXNET_DLL int MXGraphEval(GraphHandle ghdl,
+                          int num_inputs,
+                          NDArrayHandle *inputs,
+                          int *num_outputs,
+                          NDArrayHandle **outputs,
+                          int is_training);
 MXNET_DLL int MXSymbolCreateGraphSymbol(GraphHandle graph,
                                         mx_uint num_param,
                                         const char **keys,

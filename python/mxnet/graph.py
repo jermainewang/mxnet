@@ -155,6 +155,23 @@ class Graph(object):
             return [NDArray(ctypes.cast(array_hdls[i], NDArrayHandle))
                     for i in range(num_outputs.value)]
 
+    def eval(self, inputs, is_training=False):
+        output_handles = ctypes.POINTER(NDArrayHandle)()
+        num_outputs = ctypes.c_int(0)
+        check_call(_LIB.MXGraphEval(
+            self._handle,
+            ctypes.c_int(len(inputs)),
+            c_array(NDArrayHandle, [arr.handle for arr in inputs]),
+            ctypes.byref(num_outputs),
+            ctypes.byref(output_handles),
+            ctypes.c_int(int(is_training))))
+        if num_outputs.value == 1:
+            return NDArray(ctypes.cast(output_handles[0], NDArrayHandle))
+        else:
+            return [NDArray(ctypes.cast(output_handles[i], NDArrayHandle))
+                    for i in range(num_outputs.value)]
+
+
 class GraphExecutor(object):
     def __init__(self, graph, dynamic_alloc=True, zero_copy=True):
         self._handle = GraphExecutorV2Handle()

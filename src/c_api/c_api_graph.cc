@@ -37,6 +37,51 @@
 #include "../nnvm/graph_executor_v2.h"
 #include "../executor/exec_pass.h"
 
+namespace {
+void RunGraph(exec::GraphExecutorV2* exec,
+              int num_inputs,
+              NDArrayHandle *inputs,
+              int *num_outputs,
+              NDArrayHandle **outputs,
+              const exec::GraphExecutorV2::RunOption& opt) {
+  using nnvm::GraphPtr;
+  using exec::GraphExecutorV2;
+  MXAPIThreadLocalEntry *ret = MXAPIThreadLocalStore::Get();
+  const auto& graph = exec->graph();
+
+  std::vector<NDArray> arguments, results;
+  // Feed argument arrays.
+  NDArray** args_ptr = reinterpret_cast<NDArray**>(inputs);
+  for (int i = 0; i < num_inputs; ++i) {
+    arguments.push_back(*args_ptr[i]);
+  }
+  // Create result arrays.
+  NDArray** rsts_ptr = *reinterpret_cast<NDArray***>(outputs);
+  if (rsts_ptr != nullptr) {
+    for (int i = 0; i < *num_outputs; ++i) {
+      results.push_back(*rsts_ptr[i]);
+    }
+  } else {
+    if (graph.global_attrs.count("num_visible_outputs")) {
+      *num_outputs = graph.GetGlobalAttr<size_t>("num_visible_outputs");
+    } else {
+      *num_outputs = graph.outputs.size();
+    }
+  }
+  exec->Run(arguments, &results, opt);
+
+  if (rsts_ptr == nullptr) {
+    ret->ret_handles.clear();
+    for (int i = 0; i < *num_outputs; ++i) {
+      ret->ret_handles.push_back(
+          reinterpret_cast<NDArrayHandle>(new NDArray(std::move(results[i]))));
+    }
+    *outputs = dmlc::BeginPtr(ret->ret_handles);
+  }
+}
+}  // namespace
+
+
 int MXGraphCreate(SymbolHandle symbol, GraphHandle *out) {
   using nnvm::GraphPtr;
   using nnvm::Graph;
@@ -250,6 +295,36 @@ int MXGraphCreateOutputArrays(GraphHandle graph,
   API_END();
 }
 
+int MXGraphEval(GraphHandle ghdl,
+                int num_inputs,
+                NDArrayHandle *inputs,
+                int *num_outputs,
+                NDArrayHandle **outputs,
+                int is_training) {
+  using nnvm::GraphPtr;
+  using exec::GraphExecutorV2;
+
+  API_BEGIN();
+  GraphPtr pg = *static_cast<GraphPtr*>(ghdl);
+
+  // TODO(minjie): hard-code for testing.
+  using nnvm::any;
+  std::unordered_map<std::string, std::shared_ptr<any>> kwargs_any;
+  std::vector<Context> ctx = {Context::GPU(0)};
+  kwargs_any["context"] = std::make_shared<any>(std::move(ctx));
+  nnvm::Specialize(pg.get(), kwargs_any);
+
+  GraphExecutorV2 exec(pg);
+  GraphExecutorV2::RunOption opt;
+  if (Imperative::Get()->is_training()) {
+    opt.is_train = true;
+  } else {
+    opt.is_train = (is_training == 1);
+  }
+  RunGraph(&exec, num_inputs, inputs, num_outputs, outputs, opt);
+  API_END();
+}
+
 int MXExecV2Create(GraphHandle ghdl, 
                    int dynamic_allocation,
                    int zero_copy,
@@ -283,49 +358,15 @@ int MXExecV2Run(GraphExecutorV2Handle ehdl,
                 int is_training) {
   using nnvm::any;
   using exec::GraphExecutorV2;
-  MXAPIThreadLocalEntry *ret = MXAPIThreadLocalStore::Get();
 
   API_BEGIN();
   GraphExecutorV2* exec = static_cast<GraphExecutorV2*>(ehdl);
-  std::vector<NDArray> arguments, results;
-  // Feed argument arrays.
-  NDArray** args_ptr = reinterpret_cast<NDArray**>(inputs);
-  for (int i = 0; i < num_inputs; ++i) {
-    arguments.push_back(*args_ptr[i]);
-  }
-  // Create result arrays.
-  NDArray** rsts_ptr = *reinterpret_cast<NDArray***>(outputs);
-  if (rsts_ptr != nullptr) {
-    for (int i = 0; i < *num_outputs; ++i) {
-      results.push_back(*rsts_ptr[i]);
-    }
-  } else {
-    const auto& graph = exec->graph();
-    if (graph.global_attrs.count("num_visible_outputs")) {
-      *num_outputs = graph.GetGlobalAttr<size_t>("num_visible_outputs");
-    } else {
-      *num_outputs = graph.outputs.size();
-    }
-  }
   GraphExecutorV2::RunOption opt;
-  opt.is_train = (is_training == 1);
-  exec->Run(arguments, &results, opt);
-  //TODO(state)
-  //exec->GetState();
-
-  if (Imperative::Get()->is_recording()) {
-    NodeAttrs attrs;
-    //Imperative::Get()->RecordOp(std::move(attrs), arguments, results);
+  if (Imperative::Get()->is_training()) {
+    opt.is_train = true;
+  } else {
+    opt.is_train = (is_training == 1);
   }
-
-  if (rsts_ptr == nullptr) {
-    // TODO(minjie): num visible outputs
-    ret->ret_handles.clear();
-    for (int i = 0; i < *num_outputs; ++i) {
-      ret->ret_handles.push_back(
-          reinterpret_cast<NDArrayHandle>(new NDArray(std::move(results[i]))));
-    }
-    *outputs = dmlc::BeginPtr(ret->ret_handles);
-  }
+  RunGraph(exec, num_inputs, inputs, num_outputs, outputs, opt);
   API_END();
 }

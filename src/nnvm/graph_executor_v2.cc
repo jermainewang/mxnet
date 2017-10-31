@@ -4,6 +4,7 @@
  * \brief Executor to execute the computation graph.
  */
 #include "./graph_executor_v2.h"
+#include <mxnet/imperative.h>
 
 using namespace std;
 using namespace nnvm;
@@ -398,6 +399,13 @@ void GraphExecutorV2::Run(const vector<NDArray>& arguments,
     RunOpsInBulk();
   } else {
     RunOps();
+  }
+
+  if (Imperative::Get()->is_recording()) {
+    //TODO(state)
+    //exec->GetState();
+    NodeAttrs attrs;
+    //Imperative::Get()->RecordOp(std::move(attrs), arguments, results);
   }
 }
 

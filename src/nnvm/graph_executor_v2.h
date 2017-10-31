@@ -22,7 +22,7 @@ class GraphExecutorV2 {
   typedef nnvm::ColumnRef<std::shared_ptr<OpExecutorV2>> ExecState;
   struct Config {
     bool dynamic_allocation{true};
-    bool zero_copy{false};
+    bool zero_copy{true};
     bool bulk_execution{true};
     Config() {}
   };

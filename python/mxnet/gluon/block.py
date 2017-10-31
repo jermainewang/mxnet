@@ -420,7 +420,7 @@ class HybridBlock(Block):
         for i, j in self._in_idx:
             cargs[i] = args[j]
         grh.specialize_by_ndarray(cargs)
-        self._cached_op = graph.GraphExecutor(grh, dynamic_alloc=True, zero_copy=True)
+        self._cached_op = grh
 
     # TODO(minjie): new api
     def _call_cached_op_new(self, *args):
@@ -440,7 +440,8 @@ class HybridBlock(Block):
         assert fmt == self._in_format, "Invalid input format"
         for i, j in self._in_idx:
             cargs[i] = args[j]
-        out = self._cached_op.run(cargs)
+        # TODO(minjie): is_training?
+        out = self._cached_op.eval(cargs)
         #out = self._cached_op(*cargs)
         if isinstance(out, NDArray):
             out = [out]
