@@ -389,11 +389,11 @@ class InferAttrPass {
 template<typename AttrType>
 Graph InferAttrHelper(Graph &&graph,
                       const AttrType& empty_val,
-                      const string& infer_name,
-                      const string& input_name,
-                      const string& attr_key_name,
+                      const string& finfer_name,
                       const string& attr_name,
-                      const string& fwd_col_name) {
+                      const std::vector<AttrType>& attr_inputs,
+                      const ColumnRef<AttrType>& forward_attrs,
+                      const std::string& node_hint_key) {
   // Preprocess all kinds of hints into the attribute column.
   using AttrVector = vector<AttrType>;
   const IndexedGraph& idx = graph.indexed_graph();
@@ -403,21 +403,14 @@ Graph InferAttrHelper(Graph &&graph,
     graph.CreateOrWriteEntryColumn<AttrType>(attr_name, empty_val);
 
   // Get input shapes.
-  const AttrVector& shape_args = graph.GetGlobalAttr<AttrVector>(input_name);
-  CHECK_LE(shape_args.size(), idx.input_nodes().size())
+  CHECK_LE(attr_inputs.size(), idx.input_nodes().size())
       << "More provided shapes than number of arguments.";
-  for (size_t i = 0; i < shape_args.size(); ++i) {
-    attr_col->value[idx.entry_id(idx.input_nodes()[i], 0)] = shape_args[i];
+  for (size_t i = 0; i < attr_inputs.size(); ++i) {
+    attr_col->value[idx.entry_id(idx.input_nodes()[i], 0)] = attr_inputs[i];
   }
 
-  const Column<AttrType>* fwd_attr_col = graph.global_attrs.count(fwd_col_name)?
-    graph.GetGlobalAttr<ColumnRef<AttrType>>(fwd_col_name).get() : nullptr;
-
   // Get variable shapes.
-  if (graph.global_attrs.count(attr_key_name) != 0) {
-    const string& attr_key = graph.GetGlobalAttr<string>(attr_key_name);
-    CHECK(attr_key.length() != 0)
-      << "Invalid attribute key for \"" << attr_key_name << "\"";
+  if (node_hint_key.size() != 0) {
     // Save all variable shapes to the column.
     for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
       const auto& inode = idx[nid];
@@ -427,57 +420,46 @@ Graph InferAttrHelper(Graph &&graph,
       CHECK_EQ(inode.source->num_outputs(), 1U);
       const uint32_t out_ent_id = idx.entry_id(nid, 0);
       if (attr_col->value[out_ent_id] != empty_val
-          && inode.source->attrs.dict.count(attr_key) != 0) {
-        const string& attr_val = inode.source->attrs.dict.at(attr_key);
+          && inode.source->attrs.dict.count(node_hint_key) != 0) {
+        const string& attr_val = inode.source->attrs.dict.at(node_hint_key);
         istringstream is(attr_val);
         CHECK(is >> attr_col->value[out_ent_id])
-          << "Invalid attribute value \"" << attr_val << "\" for key \""
-          << attr_key << "\".";
+          << "Invalid hint value \"" << attr_val << "\" for key \""
+          << node_hint_key << "\".";
       }
     }
-    // Erase the provided arguments.
-    graph.global_attrs.erase(attr_key_name);
   }
 
-  InferAttrPass<AttrType> pass(empty_val, infer_name, attr_name);
-  pass.Infer(&graph, attr_col, fwd_attr_col);
+  InferAttrPass<AttrType> pass(empty_val, finfer_name, attr_name);
+  pass.Infer(&graph, attr_col, forward_attrs.get());
   return graph;
 }
 
 //////////////////////////// Infer shape pass /////////////////////////////
-using shape::MXInferShapeArgs;
-
 Graph MXInferShape(Graph &&graph) {
   static const TShape empty_val = TShape();
-  static const string infer_name = "FInferShape";
-  static const string input_name = "shape_inputs";
-  static const string attr_key_name = "shape_attr_key";
-  static const string attr_name = "shape";
-  static const string fwd_col_name = "forward_shapes";
+  static const string finfer_name = "FInferShape";
+  const auto& args = GetPassArgument<shape::MXInferShapeArgs>(graph, "mx_infer_shape_args");
   return InferAttrHelper<TShape>(std::move(graph),
                                  empty_val,
-                                 infer_name,
-                                 input_name,
-                                 attr_key_name,
-                                 attr_name,
-                                 fwd_col_name);
+                                 finfer_name,
+                                 shape::key,
+                                 args.shape_inputs,
+                                 args.forward_shapes,
+                                 args.node_hint_key);
 }
 NNVM_REGISTER_PASS(MXInferShape)
 .describe("Infer the shape of each node entries.")
 .set_body(MXInferShape)
 .set_change_graph(false)
-.depend_global_attr("shape_inputs")
-.provide_entry_attr("shape");
+.set_argument("mx_infer_shape_args")
+.provide_entry_attr(shape::key);
 
 Graph MXInferShapeAPI(Graph &&graph) {
   static const TShape empty_val = TShape();
-  static const string infer_name = "FInferShape";
-  static const string input_name = "shape_inputs";
-  static const string attr_key_name = "shape_attr_key";
-  static const string attr_name = "shape";
-  static const string fwd_col_name = "forward_shapes";
-  const string& json_args = graph.GetGlobalAttr<string>("mx_infer_shape_args");
-  MXInferShapeArgs args;
+  static const string finfer_name = "FInferShape";
+  const string& json_args = GetPassArgument<string>(graph, "mx_infer_shape_args_json");
+  shape::MXInferShapeArgs args;
   istringstream is(json_args);
   dmlc::JSONReader reader(&is);
   reader.Read(&args);
@@ -485,62 +467,49 @@ Graph MXInferShapeAPI(Graph &&graph) {
   CHECK_LE(args.shape_inputs.size(), idx.input_nodes().size())
     << "Pass argument error: more input shapes are provided than required.";
   args.shape_inputs.resize(idx.input_nodes().size());
-  graph.global_attrs[input_name] = std::make_shared<any>(std::move(args.shape_inputs));
-  graph.global_attrs[fwd_col_name] = std::make_shared<any>(std::move(args.forward_shapes));
   auto&& ret = InferAttrHelper<TShape>(std::move(graph),
                                        empty_val,
-                                       infer_name,
-                                       input_name,
-                                       attr_key_name,
-                                       attr_name,
-                                       fwd_col_name);
-  ret.global_attrs.erase(input_name);
-  ret.global_attrs.erase(fwd_col_name);
+                                       finfer_name,
+                                       dtype::key,
+                                       args.shape_inputs,
+                                       args.forward_shapes,
+                                       args.node_hint_key);
   return ret;
 }
 NNVM_REGISTER_PASS(MXInferShapeAPI)
 .describe("Infer the shape of each node entries.")
 .set_body(MXInferShapeAPI)
 .set_change_graph(false)
-.depend_global_attr("mx_infer_shape_args")
+.set_argument("mx_infer_shape_args_json")
 .provide_entry_attr("shape");
 
 DMLC_JSON_ENABLE_ANY(ColumnRef<TShape>, column_shape);
 
 //////////////////////////// Infer type pass /////////////////////////////
-using dtype::MXInferTypeArgs;
-
 Graph MXInferType(Graph &&graph) {
   static const int empty_val = -1;
-  static const string infer_name = "FInferType";
-  static const string input_name = "dtype_inputs";
-  static const string attr_key_name = "dtype_attr_key";
-  static const string attr_name = "dtype";
-  static const string fwd_col_name = "forward_dtypes";
+  static const string finfer_name = "FInferType";
+  const auto& args = GetPassArgument<dtype::MXInferTypeArgs>(graph, "mx_infer_dtype_args");
   return InferAttrHelper<int>(std::move(graph),
                               empty_val,
-                              infer_name,
-                              input_name,
-                              attr_key_name,
-                              attr_name,
-                              fwd_col_name);
+                              finfer_name,
+                              dtype::key,
+                              args.dtype_inputs,
+                              args.forward_dtypes,
+                              args.node_hint_key);
 }
 NNVM_REGISTER_PASS(MXInferType)
 .describe("Infer the type of each node entries.")
 .set_body(MXInferType)
 .set_change_graph(false)
-.depend_global_attr("dtype_inputs")
+.set_argument("mx_infer_dtype_args")
 .provide_entry_attr("dtype");
 
 Graph MXInferTypeAPI(Graph &&graph) {
   static const int empty_val = -1;
-  static const string infer_name = "FInferType";
-  static const string input_name = "dtype_inputs";
-  static const string attr_key_name = "dtype_attr_key";
-  static const string attr_name = "dtype";
-  static const string fwd_col_name = "forward_dtypes";
-  const string& json_args = graph.GetGlobalAttr<string>("mx_infer_dtype_args");
-  MXInferTypeArgs args;
+  static const string finfer_name = "FInferType";
+  const string& json_args = GetPassArgument<string>(graph, "mx_infer_dtype_args_json");
+  dtype::MXInferTypeArgs args;
   istringstream is(json_args);
   dmlc::JSONReader reader(&is);
   reader.Read(&args);
@@ -548,24 +517,20 @@ Graph MXInferTypeAPI(Graph &&graph) {
   CHECK_LE(args.dtype_inputs.size(), idx.input_nodes().size())
     << "Pass argument error: more input dtypes are provided than required.";
   args.dtype_inputs.resize(idx.input_nodes().size());
-  graph.global_attrs[input_name] = std::make_shared<any>(std::move(args.dtype_inputs));
-  graph.global_attrs[fwd_col_name] = std::make_shared<any>(std::move(args.forward_dtypes));
   auto&& ret = InferAttrHelper<int>(std::move(graph),
                                     empty_val,
-                                    infer_name,
-                                    input_name,
-                                    attr_key_name,
-                                    attr_name,
-                                    fwd_col_name);
-  ret.global_attrs.erase(input_name);
-  ret.global_attrs.erase(fwd_col_name);
+                                    finfer_name,
+                                    dtype::key,
+                                    args.dtype_inputs,
+                                    args.forward_dtypes,
+                                    args.node_hint_key);
   return ret;
 }
 NNVM_REGISTER_PASS(MXInferTypeAPI)
 .describe("Infer the data type of each node entries.")
 .set_body(MXInferTypeAPI)
 .set_change_graph(false)
-.depend_global_attr("mx_infer_dtype_args")
+.set_argument("mx_infer_dtype_args_json")
 .provide_entry_attr("dtype");
 
 }  // namespace pass

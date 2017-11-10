@@ -11,8 +11,6 @@ using namespace nnvm;
 namespace mxnet {
 namespace pass {
 
-static const string kAttrIgnoredInputs = "ignored_inputs";
-
 void ComputeIgnoredInputsRec(
     const Graph& graph,
     Column<vector<uint32_t>>* ignored_inputs) {
@@ -25,13 +23,13 @@ void ComputeIgnoredInputsRec(
     }
     if (node->is_graph()) {
       auto subgraph = node->graph();
-      if (subgraph->node_attrs.count(kAttrIgnoredInputs) == 0) {
+      if (subgraph->node_attrs.count(ignore::key) == 0) {
         auto subref = subgraph->CreateNodeColumn<vector<uint32_t>>();
         ComputeIgnoredInputsRec(*subgraph, subref.CopyOnWrite());
         ignored_inputs->children[nid] = subref;
       } else {
         ignored_inputs->children[nid] =
-          subgraph->node_attrs.GetColumn<vector<uint32_t>>(kAttrIgnoredInputs);
+          subgraph->node_attrs.GetColumn<vector<uint32_t>>(ignore::key);
       }
       // Summarize.
       const auto& subidx = subgraph->indexed_graph();
@@ -60,10 +58,10 @@ void ComputeIgnoredInputsRec(
 }
 
 Graph MXComputeIgnoredInputs(Graph &&graph) {
-  if (graph.node_attrs.count(kAttrIgnoredInputs) == 0) {
+  if (graph.node_attrs.count(ignore::key) == 0) {
     auto ref = graph.CreateNodeColumn<vector<uint32_t>>();
     ComputeIgnoredInputsRec(graph, ref.CopyOnWrite());
-    graph.node_attrs.SetColumn(kAttrIgnoredInputs, ref);
+    graph.node_attrs.SetColumn(ignore::key, ref);
   }
   return graph;
 }
@@ -72,8 +70,8 @@ NNVM_REGISTER_PASS(MXComputeIgnoredInputs)
 .describe("Compute which inputs are ignored for each node.")
 .set_body(MXComputeIgnoredInputs)
 .set_change_graph(false)
-.depend_global_attr("graph_frozen")
-.provide_node_attr(kAttrIgnoredInputs);
+.set_argument("graph_frozen")
+.provide_node_attr(ignore::key);
 
 }  // namespace pass
 }  // namespace mxnet

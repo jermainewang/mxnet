@@ -38,6 +38,7 @@ class GraphExecutorV2 {
   ~GraphExecutorV2();
 
   void Run(const std::vector<NDArray>& arguments,
+           //const std::vector<OpReqType>& result_req,
            std::vector<NDArray>* results,
            const RunOption& option = RunOption());
 

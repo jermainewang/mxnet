@@ -533,7 +533,9 @@ Graph GradientRec(const Graph& fwd_graph,
     // 2. Add an attribute to the graph about visible outputs.
     new_fwd_graph.global_attrs["num_visible_outputs"] = std::make_shared<any>(
         fwd_graph.outputs.size());
-    // 3. Insert invisible outputs (required by gradient graph).
+    // 3. Insert invisible outputs. Invisible outputs
+    //    contain (1) intermediate entries required by gradient computation
+    //    (2) all invisible outputs of the graph's nodes.
     for (const auto& kv : fwdent2bwdent) {
       const NodeEntry& fwd_ent = kv.first;
       if (all_fwd_outputs.count(fwd_ent)) {
@@ -746,22 +748,26 @@ vector<IndexedGraph::NodeEntry> ExtractEntries(
 }
 
 Graph MXGradient(const Graph& graph) {
-  const MXGradientArgs& args = LoadArgs(graph.GetGlobalAttr<string>("mx_gradient_args"));
+  const MXGradientArgs& args = LoadArgs(
+      GetPassArgument<std::string>(graph, "mx_gradient_args_json"));
   return GradientRec(graph, args, grad::kOnlyForward);
 }
 
 Graph MXGradientFull(const Graph& graph) {
-  const MXGradientArgs& args = LoadArgs(graph.GetGlobalAttr<string>("mx_gradient_args"));
+  const MXGradientArgs& args = LoadArgs(
+      GetPassArgument<std::string>(graph, "mx_gradient_args_json"));
   return GradientRec(graph, args, grad::kFullGraph);
 }
 
 Graph MXGradientFullWithOutput(const Graph& graph) {
-  const MXGradientArgs& args = LoadArgs(graph.GetGlobalAttr<string>("mx_gradient_args"));
+  const MXGradientArgs& args = LoadArgs(
+      GetPassArgument<std::string>(graph, "mx_gradient_args_json"));
   return GradientRec(graph, args, grad::kFullGraphWithOutput);
 }
 
 Graph MXGradientOnlyBackward(const Graph& graph) {
-  const MXGradientArgs& args = LoadArgs(graph.GetGlobalAttr<string>("mx_gradient_args"));
+  const MXGradientArgs& args = LoadArgs(
+      GetPassArgument<std::string>(graph, "mx_gradient_args_json"));
   return GradientRec(graph, args, grad::kOnlyBackward);
 }
 
@@ -770,7 +776,7 @@ NNVM_REGISTER_PASS(MXGradient)
 .describe("Transform the graph so that it is gradable.")
 .set_body(MXGradient)
 .set_change_graph(true)
-.depend_global_attr("mx_gradient_args")
+.set_argument("mx_gradient_args_json")
 .provide_global_attr("FGradient")
 .provide_global_attr("FBackwardDependency")
 .provide_global_attr("num_visible_outputs")
@@ -781,21 +787,21 @@ NNVM_REGISTER_PASS(MXGradientFull)
 .describe("Transform the graph to compute both forward and backward.")
 .set_body(MXGradientFull)
 .set_change_graph(true)
-.depend_global_attr("mx_gradient_args")
+.set_argument("mx_gradient_args_json")
 ;
 
 NNVM_REGISTER_PASS(MXGradientFullWithOutput)
 .describe("Transform the graph to compute both forward and backward. It also keeps the forward outputs.")
 .set_body(MXGradientFullWithOutput)
 .set_change_graph(true)
-.depend_global_attr("mx_gradient_args")
+.set_argument("mx_gradient_args_json")
 ;
 
 NNVM_REGISTER_PASS(MXGradientOnlyBackward)
 .describe("Transform the graph to compute only the backward.")
 .set_body(MXGradientOnlyBackward)
 .set_change_graph(true)
-.depend_global_attr("mx_gradient_args")
+.set_argument("mx_gradient_args_json")
 .provide_global_attr("gradient_entry_mapping")
 .provide_global_attr("gradient_node_mapping")
 .provide_global_attr("feed_entry_mapping")

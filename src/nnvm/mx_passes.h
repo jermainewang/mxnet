@@ -107,12 +107,15 @@ struct MXInferShapeArgs {
   // Shapes of the forward graph. This is used when the backward
   // graph is generated separately.
   nnvm::ColumnRef<TShape> forward_shapes;
+  // Hints stored in node's attribute dictionary that can be used during inference.
+  std::string node_hint_key;
 
   void Load(dmlc::JSONReader *reader) {
     dmlc::JSONObjectReadHelper helper;
     std::vector<std::vector<int>> raw_shapes;
     helper.DeclareOptionalField("shape_inputs", &raw_shapes);
     helper.DeclareOptionalField("forward_shapes", &forward_shapes);
+    helper.DeclareOptionalField("node_hint_key", &node_hint_key);
     helper.ReadAllFields(reader);
     for (const auto& rs : raw_shapes) {
       shape_inputs.emplace_back(rs.begin(), rs.end());
@@ -129,12 +132,15 @@ struct MXInferTypeArgs {
   // Types of the forward graph. This is used when the backward
   // graph is generated separately.
   nnvm::ColumnRef<int> forward_dtypes;
+  // Hints stored in node's attribute dictionary that can be used during inference.
+  std::string node_hint_key;
 
   void Load(dmlc::JSONReader *reader) {
     dmlc::JSONObjectReadHelper helper;
     std::vector<int> raw_dtypes;
     helper.DeclareOptionalField("dtype_inputs", &raw_dtypes);
     helper.DeclareOptionalField("forward_dtypes", &forward_dtypes);
+    helper.DeclareOptionalField("node_hint_key", &node_hint_key);
     helper.ReadAllFields(reader);
     for (const auto& rt : raw_dtypes) {
       dtype_inputs.emplace_back(rt);
@@ -147,6 +153,10 @@ namespace ctx {
 static const std::string device_key = "device";
 static const std::string ctx_key = "context";
 }  // namespace ctx
+
+namespace ignore {
+static const std::string key = "ignored_inputs";
+}  // namespace ignore
 
 namespace inplace {
 static const std::string key = "inplace_option";

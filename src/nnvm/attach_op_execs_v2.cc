@@ -320,45 +320,5 @@ void AttachOpExecsRec(const Graph& g,
   }
 }
 
-/*Graph MXAttachOpExecs(Graph &&graph) {
-  using plan_memory::StorageRef;
-  using plan_memory::ref_key;
-  if (graph.node_attrs.count(attach_op::key) == 0) {
-    auto ref = graph.CreateNodeColumn<shared_ptr<OpExecutorV2>>();
-    const auto* shapes = graph.entry_attrs.GetColumn<TShape>(shape::key).get();
-    const auto* dtypes = graph.entry_attrs.GetColumn<int>(dtype::key).get();
-    const auto* mem_plan = graph.entry_attrs.GetColumn<StorageRef>(ref_key).get();
-    const auto* vdevice = graph.node_attrs.GetColumn<int>(ctx::device_key).get();
-    const auto* mutate = graph.node_attrs.GetColumn<vector<uint32_t>>(mutate::key).get();
-    using FwdExecsType = const Column<shared_ptr<OpExecutorV2>>*;
-    FwdExecsType fwd_execs = nullptr;
-    if (graph.global_attrs.count("forward_execs")) {
-      fwd_execs = graph.GetGlobalAttr<FwdExecsType>("forward_execs");
-    }
-    AttachOpExecsRec(graph,
-                     shapes,
-                     dtypes,
-                     mem_plan,
-                     vdevice,
-                     mutate,
-                     fwd_execs,
-                     ref.CopyOnWrite());
-    graph.node_attrs.SetColumn(attach_op::key, ref);
-  }
-  return graph;
-}*/
-
-/*NNVM_REGISTER_PASS(MXAttachOpExecs)
-.describe("Attach operator executor for each node in the graph.")
-.set_body(MXAttachOpExecs)
-.set_change_graph(false)
-.depend_entry_attr(shape::key)
-.depend_entry_attr(dtype::key)
-.depend_entry_attr(plan_memory::ref_key)
-.depend_node_attr(ctx::device_key)
-.depend_global_attr(ctx::ctx_key)
-.depend_node_attr(mutate::key)
-.provide_node_attr(attach_op::key);*/
-
 }  // namespace exec
 }  // namespace mxnet

@@ -66,7 +66,7 @@ NNVM_REGISTER_PASS(MXComputeMutateIndex)
 .describe("Compute input index that will be mutated for each node in the graph.")
 .set_body(MXComputeMutateIndex)
 .set_change_graph(false)
-.depend_global_attr("graph_frozen")
+.set_argument("graph_frozen")
 .provide_node_attr(mutate::key);
 
 }  // namespace pass
