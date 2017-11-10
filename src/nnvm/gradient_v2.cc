@@ -462,7 +462,7 @@ Graph GradientRec(const Graph& fwd_graph,
       // Subgraph node.
       CHECK(node->graph()->global_attrs.count("FGradient"))
         << "Graph node " << node->attrs.name << " is non-differentiable "
-        << "because its subgraph did not specialize gradient.";
+        << "because its subgraph has not been specialized for gradient computation.";
       fgrad = node->graph()->GetGlobalAttr<FGradient>("FGradient");
       CHECK_NOTNULL(fgrad);
     } else if (op_fgrad_map.count(node->op())) {

@@ -304,9 +304,9 @@ class InferAttrPass {
 
     auto finfer = finfer_shape.get(inode.source->op(), nullptr);
     CHECK(finfer != nullptr)
-      << "Attribute " << infer_name_
-      << " is not registed by op " << inode.source->op()->name
-      << " we are not able to complete the inference because of this";
+      << "Inference Error: Attribute \"" << infer_name_
+      << "\" is not registed for op \"" << inode.source->op()->name
+      << "\".";
     // Call inference function of the operator.
     try {
       finfer(inode.source->attrs, &iattr, &oattr);

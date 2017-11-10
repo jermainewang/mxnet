@@ -62,6 +62,10 @@ enum NDArrayStorageType {
   kCSRStorage,             // csr
 };
 
+namespace tape {
+typedef uint64_t TapeEntryId;
+static const TapeEntryId kNotTaped = 0;
+}  // namespace tape
 
 /*!
  * \brief ndarray interface
@@ -574,6 +578,15 @@ class NDArray {
              << "CheckAndAllocAuxData is not intended for kDefaultStorage";
     ptr_->CheckAndAllocAuxData(i, aux_shape);
   }
+
+  tape::TapeEntryId tape_entry_id() const {
+    return tape_entry_id_;
+  }
+
+  void set_tape_entry_id(tape::TapeEntryId tid) {
+    tape_entry_id_ = tid;
+  }
+  
   /*!
    * \brief Save list of ndarray into the Stream.x
    * \param fo The stream of output.
@@ -864,6 +877,8 @@ class NDArray {
   NDArrayStorageType storage_type_ = kUndefinedStorage;
   /*! \brief node entry for autograd */
   nnvm::NodeEntry entry_;
+  /*! \brief Unique id of this NDArray on the tape. Default value means not taped at all.*/
+  tape::TapeEntryId tape_entry_id_ = tape::kNotTaped;
   /*!
    * \brief internal TBlob
    * \note When user access tblob_ by some const methods like

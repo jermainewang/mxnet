@@ -6,7 +6,7 @@ from mxnet import autograd
 
 import time
 
-ctx = mx.gpu(0)
+ctx = mx.cpu(0)
 
 def sigmoid(F, x):
     return 1 / (1 + -F.exp(x))
@@ -69,12 +69,6 @@ class CrossEntropy(HybridBlock):
     def hybrid_forward(self, F, yhat, y):
         return -F.mean(F.sum(y * F.log(yhat), axis=0, exclude=True))
 
-def trash_loss(cross_entropy, outputs):
-    total_loss = 0.
-    label = nd.zeros(outputs[0].shape, ctx=ctx)
-    for output in outputs:
-        total_loss = total_loss + cross_entropy(output, label)
-    return total_loss / len(outputs)
 
 class TrashLossLSTM(Block):
     def __init__(self, hidden_size, input_size):
@@ -84,8 +78,11 @@ class TrashLossLSTM(Block):
 
     def forward(self, data):
         outputs, _ = self.lstm(data)
-        loss = trash_loss(self.cross_entropy, outputs)
-        return loss
+        total_loss = 0.
+        label = nd.zeros(outputs[0].shape, ctx=ctx)
+        for output in outputs:
+            total_loss = total_loss + self.cross_entropy(output, label)
+        return total_loss / len(outputs)
 
 def test_lstm():
     N = 1
@@ -94,14 +91,14 @@ def test_lstm():
     length = 100
     data = [nd.zeros((N, input_size), ctx=ctx) for i in range(length)]
     lstm = TrashLossLSTM(hidden_size, input_size)
-    lstm.hybridize()
+    #lstm.hybridize()
     lstm.collect_params().initialize(ctx=ctx)
     for i in range(20):
         t0 = time.time()
-        loss = lstm(data)
-        #with autograd.record():
-            #loss = lstm(data)
-            #loss.backward()
+        #loss = lstm(data)
+        with autograd.record():
+            loss = lstm(data)
+            loss.backward()
         loss.wait_to_read()
         print('Iter #%d, takes %fs' % (i, (time.time() - t0)))
 

@@ -473,6 +473,7 @@ void GraphExecutorV2::RunOpsInBulk() {
     const NDArray& nd = closures_->value[nid].in_array[index];
     use_vars.push_back(nd.var());
   }
+  std::ostringstream oss;
   for (const auto& ent : idx.outputs()) {
     const NDArray& nd = closures_->value[ent.node_id].out_array[ent.index];
     mutate_vars.push_back(nd.var());

@@ -245,7 +245,7 @@ extern void AttachOpExecsRec(
     const nnvm::Column<pass::plan_memory::StorageRef>* mem_plan,
     const nnvm::Column<int>* vdevice,
     const nnvm::Column<std::vector<uint32_t>>* mutate_index,
-    const nnvm::Column<std::shared_ptr<OpExecutorV2>>* fwd_execs,
+    const nnvm::Column<std::shared_ptr<OpExecutorV2>>* fwd_states,
     nnvm::Column<std::shared_ptr<OpExecutorV2>>* execs);
 }  // namespace exec
 

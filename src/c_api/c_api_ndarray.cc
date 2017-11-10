@@ -35,6 +35,8 @@
 #include "./c_api_common.h"
 #include "../common/utils.h"
 #include "../common/exec_utils.h"
+#include "../imperative/taping.h"
+#include "../imperative/autograd.h"
 
 using namespace mxnet;
 
@@ -134,7 +136,11 @@ void MXImperativeInvokeImpl(AtomicSymbolCreator creator,
                             int num_params,
                             const char **param_keys,
                             const char **param_vals) {
-  const nnvm::Op* op = static_cast<nnvm::Op*>(creator);
+  using nnvm::Op;
+  using nnvm::Symbol;
+  using nnvm::Graph;
+  const Op* op = static_cast<nnvm::Op*>(creator);
+  //LOG(INFO) << "ImperativeInvoke op: " << op->name;
   MXAPIThreadLocalEntry *ret = MXAPIThreadLocalStore::Get();
 
   nnvm::NodeAttrs attrs = ParseAttrs(op, num_inputs, num_params, param_keys, param_vals);
@@ -148,6 +154,9 @@ void MXImperativeInvokeImpl(AtomicSymbolCreator creator,
       num_outputs, infered_num_outputs, num_visible_outputs, outputs);
 
   auto state = Imperative::Get()->Invoke(Context::CPU(), attrs, ndinputs, ndoutputs);
+  if (Imperative::Get()->is_recording()) {
+    ag::RecordGradientInfo(attrs, ndinputs, ndoutputs, tape::Tape::Get(tape::kGradTape));
+  }
   //if (Imperative::Get()->is_recording()) {
     //Imperative::Get()->RecordOp(std::move(attrs), ndinputs, ndoutputs, state);
   //}
@@ -201,6 +210,7 @@ int MXImperativeInvokeEx(AtomicSymbolCreator creator,
 
 int MXCreateCachedOp(SymbolHandle handle,
                      CachedOpHandle *out) {
+  LOG(FATAL) << "Cached op has been disabled.";
   nnvm::Symbol* sym = static_cast<nnvm::Symbol*>(handle);
 
   API_BEGIN();
@@ -221,6 +231,8 @@ int MXInvokeCachedOp(CachedOpHandle handle,
                      NDArrayHandle *inputs,
                      int *num_outputs,
                      NDArrayHandle **outputs) {
+  LOG(FATAL) << "Cached op has been disabled.";
+
   static const auto cached_op = nnvm::Op::Get("_CachedOp");
   MXAPIThreadLocalEntry *ret = MXAPIThreadLocalStore::Get();
 
@@ -275,6 +287,8 @@ int MXInvokeCachedOpEx(CachedOpHandle handle,
                        int *num_outputs,
                        NDArrayHandle **outputs,
                        const int **out_stypes) {  // outputs storage types
+  LOG(FATAL) << "Cached op has been disabled.";
+
   MXAPIThreadLocalEntry *ret = MXAPIThreadLocalStore::Get();
   int err = MXInvokeCachedOp(handle, num_inputs, inputs, num_outputs, outputs);
   if (err != 0) return err;
@@ -309,6 +323,11 @@ int MXAutogradIsRecording(bool* curr) {
 
 int MXAutogradSetIsRecording(int is_recording, int* prev) {
   API_BEGIN();
+  if (Imperative::Get()->is_recording() && is_recording == false) {
+    // Turning off previous recording tape.
+    // TODO(minjie): tape id.
+    tape::Tape::Get(0)->NewSession();
+  }
   *prev = Imperative::Get()->set_is_recording(static_cast<bool>(is_recording));
   API_END();
 }
@@ -359,7 +378,7 @@ int MXAutogradBackwardEx(mx_uint num_output,
   MXAPIThreadLocalEntry *ret = MXAPIThreadLocalStore::Get();
   API_BEGIN();
 
-  std::vector<NDArray*> outputs, ograds, variables;
+  std::vector<const NDArray*> outputs, ograds, variables;
   outputs.reserve(num_output);
   for (mx_uint i = 0; i < num_output; ++i) {
     outputs.emplace_back(reinterpret_cast<NDArray*>(output_handles[i]));
@@ -379,17 +398,22 @@ int MXAutogradBackwardEx(mx_uint num_output,
     variables.emplace_back(reinterpret_cast<NDArray*>(var_handles[i]));
   }
 
-  auto grads = Imperative::Get()->Backward(outputs, ograds, variables, is_train,
-                                                  retain_graph, create_graph);
+  // TODO(minjie): >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+  ag::GenerateBackwardGraph(*tape::Tape::Get(tape::kGradTape), outputs, variables);
+  LOG(FATAL) << "Not Implemented.";
+  // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+
+  //auto grads = Imperative::Get()->Backward(outputs, ograds, variables, is_train,
+                                                  //retain_graph, create_graph);
   if (num_variables != 0) {
     ret->ret_handles.clear();
     ret->out_types.clear();
-    ret->ret_handles.reserve(grads.size());
-    ret->out_types.reserve(grads.size());
-    for (const auto& i : grads) {
-      ret->ret_handles.push_back(i);
-      ret->out_types.push_back(i->storage_type());
-    }
+    //ret->ret_handles.reserve(grads.size());
+    //ret->out_types.reserve(grads.size());
+    //for (const auto& i : grads) {
+      //ret->ret_handles.push_back(i);
+      //ret->out_types.push_back(i->storage_type());
+    //}
     *grad_handles = dmlc::BeginPtr(ret->ret_handles);
     *grad_stypes = dmlc::BeginPtr(ret->out_types);
   }

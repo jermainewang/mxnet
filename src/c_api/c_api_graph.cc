@@ -81,6 +81,25 @@ void RunGraph(exec::GraphExecutorV2* exec,
 }
 }  // namespace
 
+void _SpecializeByNDArrays(nnvm::Graph* graph, int num_arrays, NDArrayHandle *arrays) {
+  using nnvm::any;
+  std::unordered_map<std::string, std::shared_ptr<any>> kwargs_any;
+  std::vector<TShape> shape_inputs(num_arrays, TShape());
+  std::vector<int> dtype_inputs(num_arrays, -1);
+  shape_inputs.reserve(num_arrays);
+  dtype_inputs.reserve(num_arrays);
+  for (int i = 0; i < num_arrays; ++i) {
+    NDArray* arr = static_cast<NDArray*>(arrays[i]);
+    if (arr && !arr->is_none()) {
+      shape_inputs[i] = arr->shape();
+      dtype_inputs[i] = arr->dtype();
+    }
+  }
+  kwargs_any["shape_inputs"] = std::make_shared<any>(std::move(shape_inputs));
+  kwargs_any["dtype_inputs"] = std::make_shared<any>(std::move(dtype_inputs));
+  kwargs_any["graph_frozen"] = std::make_shared<any>((int)1);
+  nnvm::Specialize(graph, kwargs_any);
+}
 
 int MXGraphCreate(SymbolHandle symbol, GraphHandle *out) {
   using nnvm::GraphPtr;
@@ -93,12 +112,14 @@ int MXGraphCreate(SymbolHandle symbol, GraphHandle *out) {
   *out = pg;
   API_END_HANDLE_ERROR(delete pg;);
 }
+
 int MXGraphFree(GraphHandle graph) {
   using nnvm::GraphPtr;
   API_BEGIN();
   delete static_cast<GraphPtr*>(graph);
   API_END();
 }
+
 int MXGraphSpecialize(GraphHandle graph,
                       mx_uint num_param,
                       const char **keys,
@@ -115,6 +136,7 @@ int MXGraphSpecialize(GraphHandle graph,
   nnvm::Specialize(pg.get(), kwargs_any);
   API_END();
 }
+
 MXNET_DLL int MXGraphSpecializeByNDArrays(GraphHandle graph,
                                           int num_arrays,
                                           NDArrayHandle *arrays) {
@@ -122,24 +144,10 @@ MXNET_DLL int MXGraphSpecializeByNDArrays(GraphHandle graph,
   using nnvm::any;
   API_BEGIN();
   GraphPtr pg = *static_cast<GraphPtr*>(graph);
-  std::unordered_map<std::string, std::shared_ptr<any>> kwargs_any;
-  std::vector<TShape> shape_inputs(num_arrays, TShape());
-  std::vector<int> dtype_inputs(num_arrays, -1);
-  shape_inputs.reserve(num_arrays);
-  dtype_inputs.reserve(num_arrays);
-  for (int i = 0; i < num_arrays; ++i) {
-    NDArray* arr = static_cast<NDArray*>(arrays[i]);
-    if (arr && !arr->is_none()) {
-      shape_inputs[i] = arr->shape();
-      dtype_inputs[i] = arr->dtype();
-    }
-  }
-  kwargs_any["shape_inputs"] = std::make_shared<any>(std::move(shape_inputs));
-  kwargs_any["dtype_inputs"] = std::make_shared<any>(std::move(dtype_inputs));
-  kwargs_any["graph_frozen"] = std::make_shared<any>((int)1);
-  nnvm::Specialize(pg.get(), kwargs_any);
+  _SpecializeByNDArrays(pg.get(), num_arrays, arrays);
   API_END();
 }
+
 int MXGraphTransform(GraphHandle graph,
                      mx_uint num_passes,
                      const char **pass_names,
@@ -168,6 +176,7 @@ int MXGraphTransform(GraphHandle graph,
   *out = pp_out_graph;
   API_END_HANDLE_ERROR(delete pp_out_graph;);
 }
+
 int MXGraphGetGlobalAttrJSON(GraphHandle graph,
                              const char *key,
                              const char **out) {
