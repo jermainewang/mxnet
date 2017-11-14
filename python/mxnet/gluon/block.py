@@ -410,7 +410,8 @@ class HybridBlock(Block):
         self._in_idx = [(i, name2pos[name]) for i, name in enumerate(out.list_inputs())
                         if name not in params]
 
-        grh = graph.create(out)
+        grh = graph.create(out).transform_to_op_compatible(grad_order=1)
+        grh.freeze()
         args, fmt = _flatten(args)
         assert fmt == self._in_format, "Invalid input format"
         try:

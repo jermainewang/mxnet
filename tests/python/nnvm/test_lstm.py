@@ -91,7 +91,7 @@ def test_lstm():
     length = 100
     data = [nd.zeros((N, input_size), ctx=ctx) for i in range(length)]
     lstm = TrashLossLSTM(hidden_size, input_size)
-    #lstm.hybridize()
+    lstm.hybridize()
     lstm.collect_params().initialize(ctx=ctx)
     for i in range(20):
         t0 = time.time()

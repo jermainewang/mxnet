@@ -29,28 +29,29 @@ struct MXEntryArg {
     helper.ReadAllFields(reader);
   }
 };
+
+// TODO(minjie): support multiple partial derivative.
 struct MXGradientArgs {
   // The targets to be differentiated. If none is given,
   // all the input entries will be included.
   // Note: Only one of "xs" and "xs_blacklist" should be provided.
-  // If none is provided, blacklist rule is applied.
+  // If none is provided, all inputs will be included.
   std::vector<MXEntryArg> xs;
   // Alternative way to specify the gradable targets. The list
   // specifies which input entries do NOT need to be differentiated.
   // Note: Only one of "xs" and "xs_blacklist" should be provided.
-  // If none is provided, blacklist rule is applied.
+  // If none is provided, all inputs will be included.
   std::vector<MXEntryArg> xs_blacklist;
-
   // The objective entries to compute gradients from. If none is
   // given, all the output entries will be included.
   // Note: Only one of "ys" and "ys_blacklist" should be provided.
-  // If none is provided, blacklist rule is applied.
+  // If none is provided, all outputs will be grouped as one target.
   std::vector<MXEntryArg> ys;
   // Alternative way to specify the objective entries. The list
   // specifies which objective entries are NOT included in gradient
   // computation.
   // Note: Only one of "ys" and "ys_blacklist" should be provided.
-  // If none is provided, blacklist rule is applied.
+  // If none is provided, all outputs will be grouped as one target.
   std::vector<MXEntryArg> ys_blacklist;
 
   void Load(dmlc::JSONReader *reader) {

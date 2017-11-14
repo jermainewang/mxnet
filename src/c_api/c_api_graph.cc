@@ -34,8 +34,10 @@
 
 #include "./c_api_common.h"
 #include "../operator/operator_common.h"
+#include "../nnvm/mx_passes.h"
 #include "../nnvm/graph_executor_v2.h"
 #include "../executor/exec_pass.h"
+#include "../imperative/autograd.h"
 
 namespace {
 void RunGraph(exec::GraphExecutorV2* exec,
@@ -47,7 +49,12 @@ void RunGraph(exec::GraphExecutorV2* exec,
   using nnvm::GraphPtr;
   using exec::GraphExecutorV2;
   MXAPIThreadLocalEntry *ret = MXAPIThreadLocalStore::Get();
-  const auto& graph = exec->graph();
+  auto gptr = exec->graph();
+  const int num_visible_outputs =
+    (gptr->global_attrs.count("num_visible_outputs")) ?
+    gptr->GetGlobalAttr<size_t>("num_visible_outputs") :
+    gptr->outputs.size();
+  const int num_all_outputs = gptr->outputs.size();
 
   std::vector<NDArray> arguments, results;
   // Feed argument arrays.
@@ -58,21 +65,34 @@ void RunGraph(exec::GraphExecutorV2* exec,
   // Create result arrays.
   NDArray** rsts_ptr = *reinterpret_cast<NDArray***>(outputs);
   if (rsts_ptr != nullptr) {
-    for (int i = 0; i < *num_outputs; ++i) {
-      results.push_back(*rsts_ptr[i]);
+    CHECK_EQ(*num_outputs, num_visible_outputs);
+    results.resize(num_all_outputs);
+    for (int i = 0; i < num_visible_outputs; ++i) {
+      results[i] = *rsts_ptr[i];
     }
   } else {
-    if (graph.global_attrs.count("num_visible_outputs")) {
-      *num_outputs = graph.GetGlobalAttr<size_t>("num_visible_outputs");
-    } else {
-      *num_outputs = graph.outputs.size();
-    }
+    *num_outputs = num_visible_outputs;
   }
   exec->Run(arguments, &results, opt);
 
+  if (Imperative::Get()->is_recording()) {
+    // TODO(minjie): output arrays are not supported in recording mode.
+    CHECK(rsts_ptr == nullptr);
+    NodeAttrs attrs;
+    attrs.graph = gptr;
+    std::vector<NDArray*> ndinputs(arguments.size()), ndoutputs(results.size());
+    for (size_t i = 0; i < arguments.size(); ++i) {
+      ndinputs[i] = &arguments[i];
+    }
+    for (size_t i = 0; i < results.size(); ++i) {
+      ndoutputs[i] = &results[i];
+    }
+    ag::RecordGradientInfo(attrs, ndinputs, ndoutputs, tape::Tape::Get(tape::kGradTape));
+  }
+
   if (rsts_ptr == nullptr) {
     ret->ret_handles.clear();
-    for (int i = 0; i < *num_outputs; ++i) {
+    for (int i = 0; i < num_visible_outputs; ++i) {
       ret->ret_handles.push_back(
           reinterpret_cast<NDArrayHandle>(new NDArray(std::move(results[i]))));
     }
@@ -83,11 +103,11 @@ void RunGraph(exec::GraphExecutorV2* exec,
 
 void _SpecializeByNDArrays(nnvm::Graph* graph, int num_arrays, NDArrayHandle *arrays) {
   using nnvm::any;
+  using pass::shape::MXInferShapeArgs;
+  using pass::dtype::MXInferTypeArgs;
   std::unordered_map<std::string, std::shared_ptr<any>> kwargs_any;
   std::vector<TShape> shape_inputs(num_arrays, TShape());
   std::vector<int> dtype_inputs(num_arrays, -1);
-  shape_inputs.reserve(num_arrays);
-  dtype_inputs.reserve(num_arrays);
   for (int i = 0; i < num_arrays; ++i) {
     NDArray* arr = static_cast<NDArray*>(arrays[i]);
     if (arr && !arr->is_none()) {
@@ -95,9 +115,12 @@ void _SpecializeByNDArrays(nnvm::Graph* graph, int num_arrays, NDArrayHandle *ar
       dtype_inputs[i] = arr->dtype();
     }
   }
-  kwargs_any["shape_inputs"] = std::make_shared<any>(std::move(shape_inputs));
-  kwargs_any["dtype_inputs"] = std::make_shared<any>(std::move(dtype_inputs));
-  kwargs_any["graph_frozen"] = std::make_shared<any>((int)1);
+  MXInferShapeArgs shape_args;
+  MXInferTypeArgs dtype_args;
+  shape_args.shape_inputs = std::move(shape_inputs);
+  dtype_args.dtype_inputs = std::move(dtype_inputs);
+  kwargs_any["mx_infer_shape_args"] = std::make_shared<any>(std::move(shape_args));
+  kwargs_any["mx_infer_dtype_args"] = std::make_shared<any>(std::move(dtype_args));
   nnvm::Specialize(graph, kwargs_any);
 }
 
@@ -105,12 +128,14 @@ int MXGraphCreate(SymbolHandle symbol, GraphHandle *out) {
   using nnvm::GraphPtr;
   using nnvm::Graph;
   using nnvm::Symbol;
-  GraphPtr* pg = new GraphPtr();
-  *pg = Graph::Create();
+  using nnvm::any;
+  GraphPtr* ppg = new GraphPtr();
+  *ppg = Graph::Create();
   API_BEGIN();
-  (*pg)->outputs = static_cast<Symbol*>(symbol)->outputs;
-  *out = pg;
-  API_END_HANDLE_ERROR(delete pg;);
+  Graph& graph = **ppg;
+  graph.outputs = static_cast<Symbol*>(symbol)->outputs;
+  *out = ppg;
+  API_END_HANDLE_ERROR(delete ppg;);
 }
 
 int MXGraphFree(GraphHandle graph) {
@@ -173,6 +198,28 @@ int MXGraphTransform(GraphHandle graph,
     kwargs_any[kv.first] = std::make_shared<any>(kv.second);
   }
   **pp_out_graph = nnvm::Transform(*p_in_graph, passes, kwargs_any);
+  *out = pp_out_graph;
+  API_END_HANDLE_ERROR(delete pp_out_graph;);
+}
+
+int MXGraphTransformToOpCompatible(GraphHandle ghdl,
+                                   mx_uint grad_order,
+                                   GraphHandle *out) {
+  using nnvm::GraphPtr;
+  using nnvm::Graph;
+  using nnvm::any;
+  GraphPtr* pp_out_graph = new GraphPtr();
+  *pp_out_graph = Graph::Create();
+  API_BEGIN();
+  CHECK_LE(grad_order, 1)
+    << "Up to first-order gradient is supported right now.";
+  GraphPtr pg = *static_cast<GraphPtr*>(ghdl);
+  std::unordered_map<std::string, std::shared_ptr<any>> kwargs_any;
+  **pp_out_graph = nnvm::Transform(*pg, {"MXExposeInvisibleOutputs"}, kwargs_any);
+  if (grad_order > 0) {
+    kwargs_any["mx_gradient_args"] = std::make_shared<any>(pass::grad::MXGradientArgs());
+    **pp_out_graph = nnvm::Transform(**pp_out_graph, {"MXGradient"}, kwargs_any);
+  }
   *out = pp_out_graph;
   API_END_HANDLE_ERROR(delete pp_out_graph;);
 }
@@ -319,8 +366,8 @@ int MXGraphEval(GraphHandle ghdl,
   // TODO(minjie): hard-code for testing.
   using nnvm::any;
   std::unordered_map<std::string, std::shared_ptr<any>> kwargs_any;
-  std::vector<Context> ctx = {Context::GPU(0)};
-  kwargs_any["context"] = std::make_shared<any>(std::move(ctx));
+  std::vector<Context> ctx = {Context::CPU(0)};
+  kwargs_any[pass::ctx::ctx_key] = std::make_shared<any>(std::move(ctx));
   nnvm::Specialize(pg.get(), kwargs_any);
 
   GraphExecutorV2 exec(pg);
@@ -348,7 +395,7 @@ int MXExecV2Create(GraphHandle ghdl,
   // TODO(minjie): hard-code for testing.
   using nnvm::any;
   std::unordered_map<std::string, std::shared_ptr<any>> kwargs_any;
-  std::vector<Context> ctx = {Context::GPU(0)};
+  std::vector<Context> ctx = {Context::CPU(0)};
   kwargs_any["context"] = std::make_shared<any>(std::move(ctx));
   nnvm::Specialize(pg.get(), kwargs_any);
 

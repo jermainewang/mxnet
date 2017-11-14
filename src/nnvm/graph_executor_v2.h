@@ -31,7 +31,7 @@ class GraphExecutorV2 {
     RunOption() {}
   };
 
-  GraphExecutorV2(std::shared_ptr<const nnvm::Graph> graph,
+  GraphExecutorV2(nnvm::GraphPtr graph,
                   const ExecState& fwd_state = ExecState(),
                   const Config& config = Config());
 
@@ -49,7 +49,7 @@ class GraphExecutorV2 {
   // the returned state may be polluted.
   const ExecState& GetState() const { return op_execs_; }
 
-  const nnvm::Graph& graph() const { return *graph_ptr_; }
+  nnvm::GraphPtr graph() const { return graph_ptr_; }
 
  private:
   void AttachOps();
@@ -69,7 +69,7 @@ class GraphExecutorV2 {
 
  private:
   // The graph to be evaluated.
-  std::shared_ptr<const nnvm::Graph> graph_ptr_;
+  nnvm::GraphPtr graph_ptr_;
   // Configurations of this executor.
   const Config config_;
   // OpExecutors of forward graph.

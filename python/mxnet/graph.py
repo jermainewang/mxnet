@@ -106,7 +106,6 @@ class Graph(object):
             mx_uint(len(arrays)),
             c_array(NDArrayHandle, hdls)))
 
-
     def transform(self, pass_names, **kwargs):
         assert not self._freezed, \
                 'The graph cannot be changed after a GraphSymbol is created.'
@@ -126,6 +125,14 @@ class Graph(object):
             passes,
             mx_uint(len(keys)),
             keys, vals,
+            ctypes.byref(out)))
+        return Graph(out)
+
+    def transform_to_op_compatible(self, grad_order=0):
+        out = GraphHandle()
+        check_call(_LIB.MXGraphTransformToOpCompatible(
+            self._handle,
+            mx_uint(grad_order),
             ctypes.byref(out)))
         return Graph(out)
 

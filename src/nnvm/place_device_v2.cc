@@ -26,6 +26,8 @@ Graph MXPlaceDefaultDevice(Graph&& graph) {
   ColumnRef<int> devref = graph.CreateNodeColumn<int>(0);
   PlaceDeviceDefaultRec(graph, devref.CopyOnWrite());
   graph.node_attrs.SetColumn(ctx::device_key, devref);
+  const auto& ctx = GetPassArgument<vector<Context>>(graph, ctx::ctx_key);
+  graph.global_attrs[ctx::ctx_key] = std::make_shared<any>(ctx);
   return graph;
 }
 
@@ -33,7 +35,8 @@ NNVM_REGISTER_PASS(MXPlaceDefaultDevice)
 .describe("Assign all nodes to the default device.")
 .set_body(MXPlaceDefaultDevice)
 .set_change_graph(false)
-.depend_global_attr(ctx::ctx_key)
+.set_argument(ctx::ctx_key)
+.provide_global_attr(ctx::ctx_key)
 .provide_node_attr(ctx::device_key);
 
 }  // namespace pass

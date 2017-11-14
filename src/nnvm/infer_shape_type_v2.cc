@@ -42,9 +42,10 @@ class InferAttrPass {
     : empty_val_(empty_val), infer_name_(infer_name), attr_name_(attr_name)
   { }
 
-  void Infer(const Graph* graph,
-             Column<AttrType>* attr_col,
-             const Column<AttrType>* fwd_attr_col = nullptr) {
+  /*!\brief return the number of nodes whose attributes are unknown. */
+  size_t Infer(const Graph* graph,
+               Column<AttrType>* attr_col,
+               const Column<AttrType>* fwd_attr_col = nullptr) {
     // Do infer.
     const IndexedGraph& idx = graph->indexed_graph();
 
@@ -80,11 +81,34 @@ class InferAttrPass {
     }
     LOG(INFO) << "]";*/
 
-    // TODO(minjie): Only one pass right now. Need multiple passes.
-    for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
-      DLOG(INFO) << "Infer node#" << nid << idx[nid].source->attrs.name;
-      InferOneNode(graph, nid, attr_col, fwd_attr_col);
-      const uint32_t eid = idx.entry_id(nid, 0);
+    // Infer attributes for multiple passes. One topological order, one reverse-topological
+    // order. Stop once no new node can be inferred.
+    size_t min_num_unknown = idx.num_nodes();
+    bool reverse = false;
+    while (true) {
+      size_t num_unknown = 0;
+      if (reverse) {
+        // Note: This check is necessary since we omit inference for nid=0 in the following
+        // loop. We assume nid=0 is a variable node so the attribute should be provided.
+        CHECK(idx[0u].source->is_variable());
+        for (uint32_t nid = idx.num_nodes() - 1; nid != 0; --nid) {
+          DLOG(INFO) << "Infer node#" << nid << idx[nid].source->attrs.name;
+          num_unknown += InferOneNode(graph, nid, attr_col, fwd_attr_col);
+        }
+      } else {
+        for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
+          DLOG(INFO) << "Infer node#" << nid << idx[nid].source->attrs.name;
+          num_unknown += InferOneNode(graph, nid, attr_col, fwd_attr_col);
+        }
+      }
+      LOG(INFO) << "#Unknown=" << num_unknown;
+      if (num_unknown == min_num_unknown || num_unknown == 0) {
+        break;
+      } else {
+        CHECK(num_unknown < min_num_unknown);
+        min_num_unknown = num_unknown;
+        reverse = !reverse;  // Flip inference order.
+      }
     }
 
     // If this is a forward node and its gradient has been specialized. We
@@ -97,6 +121,7 @@ class InferAttrPass {
         grad_g->CreateOrWriteEntryColumn<AttrType>(attr_name_, empty_val_);
       this->Infer(grad_g.get(), grad_g_attr, attr_col);
     }
+    return min_num_unknown;
   }
 
  private:
@@ -181,10 +206,10 @@ class InferAttrPass {
     }
   }
 
-  void InferGraphNode(const Graph* graph,
-                      uint32_t nid,
-                      Column<AttrType>* attr,
-                      const Column<AttrType>* fwd_attr_col) {
+  size_t InferGraphNode(const Graph* graph,
+                        uint32_t nid,
+                        Column<AttrType>* attr,
+                        const Column<AttrType>* fwd_attr_col) {
     const IndexedGraph& idx = graph->indexed_graph();
     const Node* node = idx[nid].source;
     auto sg = node->graph();
@@ -223,24 +248,38 @@ class InferAttrPass {
         }
       }
       DLOG(INFO) << ">>>>Infer subgraph node: " << node->attrs.name;
-      this->Infer(sg.get(), subattr, sub_fwd_attr_col);
-      
+      return this->Infer(sg.get(), subattr, sub_fwd_attr_col);
     }
     // Fetch input/output attribute.
     CopyFromSubColumn(*sg, attr->children[nid].get(), *graph, nid, attr);
+    return 0;
   }
 
-  void InferOpNode(const Graph* graph,
+  bool InferOpNode(const Graph* graph,
                    uint32_t nid,
                    Column<AttrType>* attr) {
     const IndexedGraph& idx = graph->indexed_graph();
     static auto& is_backward = Op::GetAttr<TIsBackward>("TIsBackward");
-    const auto& inode = idx[nid];
-    if (is_backward.get(inode.source->op(), false) && inode.control_deps.size()) {
+    const Node* node = idx[nid].source;
+    if (is_backward.get(node->op(), false) && node->control_deps.size()) {
       InferLegacyBackwardNode(graph, nid, attr);
     } else {
       InferNormalOpNode(graph, nid, attr);
     }
+
+    bool known = true;
+    for (uint32_t i = 0; known && i < node->inputs.size(); ++i) {
+      if (attr->value[idx.entry_id(node->inputs[i])] == empty_val_) {
+        known = false;
+      }
+      //LOG(INFO) << "\tFwd ent#" << idx.entry_id(inode.inputs[i]) << ": " << iattr[i];
+    }
+    for (uint32_t i = 0; known && i < node->num_outputs(); ++i) {
+      if (attr->value[idx.entry_id(nid, i)] == empty_val_) {
+        known = false;
+      }
+    }
+    return known;
   }
 
   void InferLegacyBackwardNode(const Graph* graph,
@@ -278,8 +317,6 @@ class InferAttrPass {
             << attr_name_;
       }
     }
-    // XXX(minjie): Handle grad_out entries. This original logic should not be
-    // needed since "gradient_entry_mapping" should handle this.
   }
 
   void InferNormalOpNode(const Graph* graph,
@@ -303,10 +340,9 @@ class InferAttrPass {
     }
 
     auto finfer = finfer_shape.get(inode.source->op(), nullptr);
-    CHECK(finfer != nullptr)
-      << "Inference Error: Attribute \"" << infer_name_
-      << "\" is not registed for op \"" << inode.source->op()->name
-      << "\".";
+    if (finfer == nullptr) {
+      return;
+    }
     // Call inference function of the operator.
     try {
       finfer(inode.source->attrs, &iattr, &oattr);
@@ -325,10 +361,10 @@ class InferAttrPass {
     }
   }
 
-  void InferOneNode(const Graph* graph,
-                    uint32_t nid,
-                    Column<AttrType>* attr,
-                    const Column<AttrType>* fwd_attr_col) {
+  size_t InferOneNode(const Graph* graph,
+                      uint32_t nid,
+                      Column<AttrType>* attr,
+                      const Column<AttrType>* fwd_attr_col) {
 
     const IndexedGraph& idx = graph->indexed_graph();
     const auto& inode = idx[nid];
@@ -346,12 +382,13 @@ class InferAttrPass {
     }
     if (all_known) {
       // All is known, no need to do infer.
-      return;
+      return 0;
     }
 
     if (node->is_variable()) {
       if (node->control_deps.empty()) {
-        return;
+        // Normal variable node but attribute hints are not provided.
+        return 1;
       }
       // Head grad variable node.
       // 1. The first control dependency is point to the forward node.
@@ -373,10 +410,11 @@ class InferAttrPass {
             << "Backward " << attr_name_ << " is inconsistent with the forward "
             << attr_name_;
       }
+      return attr->value[bwd_eid] == empty_val_? 1 : 0;
     } else if (node->is_graph()) {
-      InferGraphNode(graph, nid, attr, fwd_attr_col);
+      return InferGraphNode(graph, nid, attr, fwd_attr_col);
     } else {
-      InferOpNode(graph, nid, attr); 
+      return InferOpNode(graph, nid, attr)? 0 : 1;
     }
   }
 
@@ -470,7 +508,7 @@ Graph MXInferShapeAPI(Graph &&graph) {
   auto&& ret = InferAttrHelper<TShape>(std::move(graph),
                                        empty_val,
                                        finfer_name,
-                                       dtype::key,
+                                       shape::key,
                                        args.shape_inputs,
                                        args.forward_shapes,
                                        args.node_hint_key);

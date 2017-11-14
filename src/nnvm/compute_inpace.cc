@@ -90,7 +90,6 @@ NNVM_REGISTER_PASS(MXComputeInplaceOption)
 .describe("Compute which inputs are ignored for each node.")
 .set_body(MXComputeInplaceOption)
 .set_change_graph(false)
-.set_argument("graph_frozen")
 .depend_entry_attr(shape::key)
 .provide_node_attr(inplace::key);
 

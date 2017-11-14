@@ -279,7 +279,7 @@ void ResetClosure(const Node* node, Closure* cl) {
 }
 }  // namespace
 
-GraphExecutorV2::GraphExecutorV2(shared_ptr<const Graph> graph,
+GraphExecutorV2::GraphExecutorV2(nnvm::GraphPtr graph,
                                  const GraphExecutorV2::ExecState& fwd_state,
                                  const GraphExecutorV2::Config& config)
   : graph_ptr_(graph), config_(config), fwd_execs_(fwd_state),
