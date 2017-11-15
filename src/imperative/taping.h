@@ -37,10 +37,6 @@ class Tape {
 
   void NewSession();
 
-  static uint32_t CreateNewTape();
-
-  static void DestroyTape(uint32_t tapeid);
-  
   static Tape* Get(uint32_t tapeid);
 
  private:

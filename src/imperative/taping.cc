@@ -100,28 +100,11 @@ void Tape::NewSession() {
   ++session_id_;
 }
 
-uint32_t Tape::CreateNewTape() {
-  LOG(FATAL) << "Not implemented.";
-  return 0;
-}
-
-void Tape::DestroyTape(uint32_t tapeid) {
-  LOG(FATAL) << "Not implemented.";
-}
-
 Tape* Tape::Get(uint32_t tapeid) {
   // TODO(only single tape right now).
   static Tape tape(1);
   return &tape;
 }
-
-  /*vector<NDArray> values;
-  values.reserve(outputs.size());
-  for (size_t i = 0; i < outputs.size(); ++i) {
-    outputs[i]->set_tape_entry_id(MakeTapeEntryId(tape_id_, pos, i));
-    values.push_back(*outputs[i]);
-  }
-  node->entry_attr_row.SetEntry("value", std::move(values));*/
 
 }  // namespace tape
 }  // namespace mxnet

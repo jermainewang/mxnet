@@ -154,12 +154,12 @@ void MXImperativeInvokeImpl(AtomicSymbolCreator creator,
       num_outputs, infered_num_outputs, num_visible_outputs, outputs);
 
   auto state = Imperative::Get()->Invoke(Context::CPU(), attrs, ndinputs, ndoutputs);
-  if (Imperative::Get()->is_recording()) {
-    ag::RecordGradientInfo(attrs, ndinputs, ndoutputs, tape::Tape::Get(tape::kGradTape));
-  }
   //if (Imperative::Get()->is_recording()) {
-    //Imperative::Get()->RecordOp(std::move(attrs), ndinputs, ndoutputs, state);
+    //ag::RecordGradientInfo(attrs, ndinputs, ndoutputs, tape::Tape::Get(tape::kGradTape));
   //}
+  if (Imperative::Get()->is_recording()) {
+    Imperative::Get()->RecordOp(std::move(attrs), ndinputs, ndoutputs, state);
+  }
 
   for (int i = *num_outputs; i < infered_num_outputs; ++i) delete ndoutputs[i];
 
@@ -378,7 +378,7 @@ int MXAutogradBackwardEx(mx_uint num_output,
   MXAPIThreadLocalEntry *ret = MXAPIThreadLocalStore::Get();
   API_BEGIN();
 
-  std::vector<const NDArray*> outputs, ograds, variables;
+  std::vector<NDArray*> outputs, ograds, variables;
   outputs.reserve(num_output);
   for (mx_uint i = 0; i < num_output; ++i) {
     outputs.emplace_back(reinterpret_cast<NDArray*>(output_handles[i]));
@@ -399,21 +399,21 @@ int MXAutogradBackwardEx(mx_uint num_output,
   }
 
   // TODO(minjie): >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-  ag::GenerateBackwardGraph(*tape::Tape::Get(tape::kGradTape), outputs, variables);
-  LOG(FATAL) << "Not Implemented.";
+  //ag::GenerateBackwardGraph(*tape::Tape::Get(tape::kGradTape), outputs, variables);
+  //LOG(FATAL) << "Not Implemented.";
   // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 
-  //auto grads = Imperative::Get()->Backward(outputs, ograds, variables, is_train,
-                                                  //retain_graph, create_graph);
+  auto grads = Imperative::Get()->Backward(outputs, ograds, variables, is_train,
+                                                  retain_graph, create_graph);
   if (num_variables != 0) {
     ret->ret_handles.clear();
     ret->out_types.clear();
-    //ret->ret_handles.reserve(grads.size());
-    //ret->out_types.reserve(grads.size());
-    //for (const auto& i : grads) {
-      //ret->ret_handles.push_back(i);
-      //ret->out_types.push_back(i->storage_type());
-    //}
+    ret->ret_handles.reserve(grads.size());
+    ret->out_types.reserve(grads.size());
+    for (const auto& i : grads) {
+      ret->ret_handles.push_back(i);
+      ret->out_types.push_back(i->storage_type());
+    }
     *grad_handles = dmlc::BeginPtr(ret->ret_handles);
     *grad_stypes = dmlc::BeginPtr(ret->out_types);
   }
