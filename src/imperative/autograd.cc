@@ -2,6 +2,7 @@
 #include <mxnet/op_attr_types.h>
 
 #include "./autograd.h"
+#include "../nnvm/mx_passes.h"
 
 using namespace std;
 
@@ -60,17 +61,40 @@ void RecordGradientInfo(const nnvm::NodeAttrs& attrs,
 void GenerateBackwardGraph(const tape::Tape& tape,
                            const std::vector<const NDArray*>& ys,
                            const std::vector<const NDArray*>& xs) {
+  using pass::grad::MXGradientArgs;
+  using pass::grad::MXEntryArg;
+  using nnvm::any;
   nnvm::Graph g = tape.GetGraph(ys);
   const auto& ig = g.indexed_graph();
-  for (uint32_t nid = 0; nid < ig.num_nodes(); ++nid) {
+  LOG(INFO) << ig.num_nodes();
+  /*for (uint32_t nid = 0; nid < ig.num_nodes(); ++nid) {
     const auto* node = ig[nid].source;
     LOG(INFO) << "Node#" << nid << ": " << node->attrs.name << " op="
       << (node->is_variable()? "var" : (node->is_graph()? "graph" : node->op()->name));
+  }*/
+  MXGradientArgs args;
+  uint32_t tapeid = 0, pos = 0, index = 0, sid = 0;
+  LOG(INFO) << "#variables=" << xs.size();
+  for (const NDArray* x : xs) {
+    const uint32_t teid = x->tape_entry_id();
+    std::tie(tapeid, pos, index, sid) = tape::ParseTapeEntryId(teid);
+    const uint32_t nid = ig.node_id(tape[pos].node.get());
+    MXEntryArg entarg;
+    entarg.node = nid;
+    entarg.index = index;
+    args.xs.emplace_back(std::move(entarg));
   }
-  nnvm::MoveEntryAttrsRowToColumn<TShape>(g, "shape");
-  nnvm::MoveEntryAttrsRowToColumn<int>(g, "dtype");
-  const auto& shapes = g.entry_attrs.GetColumn<TShape>("shape");
-  const auto& dtypes = g.entry_attrs.GetColumn<int>("dtype");
+  unordered_map<string, shared_ptr<any>> kwargs_any;
+  kwargs_any["mx_gradient_args"] = std::make_shared<any>(std::move(args));
+  g = nnvm::Transform(g, {"MXGradientFull"}, kwargs_any);
+  LOG(INFO) << g.outputs.size();
+  LOG(INFO) << g.GetGlobalAttr<size_t>("num_visible_outputs");
+  LOG(INFO) << g.indexed_graph().num_nodes();
+
+  //nnvm::MoveEntryAttrsRowToColumn<TShape>(g, "shape");
+  //nnvm::MoveEntryAttrsRowToColumn<int>(g, "dtype");
+  //const auto& shapes = g.entry_attrs.GetColumn<TShape>("shape");
+  //const auto& dtypes = g.entry_attrs.GetColumn<int>("dtype");
   /*for (uint32_t nid = 0; nid < ig.num_nodes(); ++nid) {
     const auto* node = ig[nid].source;
     for (uint32_t i = 0; i < node->num_outputs(); ++i) {

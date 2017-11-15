@@ -82,7 +82,7 @@ void RunGraph(exec::GraphExecutorV2* exec,
     attrs.graph = gptr;
     std::vector<NDArray*> ndinputs(arguments.size()), ndoutputs(results.size());
     for (size_t i = 0; i < arguments.size(); ++i) {
-      ndinputs[i] = &arguments[i];
+      ndinputs[i] = args_ptr[i];
     }
     for (size_t i = 0; i < results.size(); ++i) {
       ndoutputs[i] = &results[i];

@@ -55,7 +55,6 @@ class LSTM(Block):
         N, _ = data[0].shape
         h = nd.zeros((N, self.hidden_size), ctx=ctx)
         c = nd.zeros((N, self.hidden_size), ctx=ctx)
-        w = nd.zeros((self.input_size, self.hidden_size), ctx=ctx)
         states = [h, c]
         outputs = []
         for t in range(len(data)):
