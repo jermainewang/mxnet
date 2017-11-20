@@ -528,9 +528,12 @@ Graph GradientRec(const Graph& fwd_graph,
   // Create gradient subgraph.
   GraphPtr grad_g = Graph::Create();
   {
+    // TODO: remove invisible outputs used for gradient computation.
     vector<NodeEntry> grad_g_vis_outputs, grad_g_invis_outputs;
     if (mode == grad::kFullGraphWithOutput) {
       grad_g_vis_outputs = _VisibleOutputs(fwd_graph);
+      // TODO(minjie): Need to exclude the invisible outputs that are
+      //   reserved for back-propagation.
       grad_g_invis_outputs = _InvisibleOutputs(fwd_graph);
     }
     for (const auto& e : xs) {
@@ -552,29 +555,27 @@ Graph GradientRec(const Graph& fwd_graph,
   const auto& grad_g_idx = grad_g->indexed_graph();
 
   // Create new forward graph.
-  // 1. First inserts visible outputs.
   Graph new_fwd_graph;
   {
     // TODO(minjie): refactor into a function.
+    size_t num_fwd_vis_outputs = fwd_graph.outputs.size();
+    if (fwd_graph.global_attrs.count("num_visible_outputs") != 0) {
+      num_fwd_vis_outputs = fwd_graph.GetGlobalAttr<size_t>("num_visible_outputs");
+    }
+    // 1. Add an attribute to the graph about visible outputs.
+    new_fwd_graph.global_attrs["num_visible_outputs"]
+      = std::make_shared<any>(num_fwd_vis_outputs);
+    // 2. First inserts visible outputs.
     NodeEntrySet all_fwd_outputs;
-    for (size_t idx = 0; idx < fwd_graph.outputs.size(); ++idx) {
-      const NodeEntry& outent = fwd_graph.outputs[idx];
+    for (size_t i = 0; i < fwd_graph.outputs.size(); ++i) {
+      const NodeEntry& outent = fwd_graph.outputs[i];
       new_fwd_graph.outputs.push_back(outent);
       all_fwd_outputs.insert(outent);
       if (fwdent2bwdent.count(outent)) {
         const Node* bwdvar = fwdent2bwdent[outent].node.get();
-        inent_map[bwdvar] = GradNodeInInfo::CreateFromForwardOut(idx);
+        inent_map[bwdvar] = GradNodeInInfo::CreateFromForwardOut(i);
       }
     }
-    // 2. Add an attribute to the graph about visible outputs.
-    if (fwd_graph.global_attrs.count("num_visible_outputs") != 0) {
-      new_fwd_graph.global_attrs["num_visible_outputs"]
-        = fwd_graph.global_attrs.at("num_visible_outputs");
-    } else {
-      new_fwd_graph.global_attrs["num_visible_outputs"]
-        = std::make_shared<any>(fwd_graph.outputs.size());
-    }
-    LOG(INFO) << "New Fwd #visible_outputs: " << new_fwd_graph.GetGlobalAttr<size_t>("num_visible_outputs");
     // 3. Insert invisible outputs used by gradient graph.
     for (const auto& kv : fwdent2bwdent) {
       const NodeEntry& fwd_ent = kv.first;

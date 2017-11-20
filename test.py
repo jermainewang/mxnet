@@ -32,4 +32,34 @@ def test():
             PP(b.grad)
             PP(d.grad)
 
-test()
+def test1():
+    a = nd.ones((2, 3), ctx=ctx)  # a is 1
+    a_grad = nd.zeros((2, 3), ctx=ctx)
+    ag.mark_variables(a, a_grad, 'write')
+    with ag.record():
+        b = a * 2
+        b.attach_grad()
+        t = b * 3
+        t.backward()
+        PP(a.grad)
+        PP(b.grad)
+
+def test2():
+    a = nd.ones((2, 3), ctx=ctx)  # a is 1
+    a.attach_grad()
+    d = nd.zeros((2, 3), ctx=ctx) + 100  # d is 100
+    d.attach_grad()
+    with ag.record():
+        b = a * 2
+        t = b * d
+        t.backward()
+        PP(d.grad)
+    with ag.record():
+        b = a * 2
+        t = b * 3
+        t.backward()
+        PP(d.grad)
+
+#test()
+#test1()
+test2()

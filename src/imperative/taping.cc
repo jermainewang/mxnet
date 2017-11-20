@@ -46,13 +46,6 @@ NodePtr Tape::NewVariable() {
   return node;
 }
 
-void Tape::RecordValue(uint32_t pos, uint32_t index, const NDArray& value) {
-  const NodePtr& node = tape_[pos].node;
-  CHECK_LT(index, node->num_outputs());
-  auto& values = node->CreateOrGetEntryAttrs<NDArray>("value");
-  values.value[index] = value;
-}
-
 uint32_t Tape::Record(const NodeAttrs& attrs,
                       const vector<NDArray*>& inputs,
                       const vector<NDArray*>& outputs) {
@@ -100,10 +93,10 @@ void Tape::NewSession() {
   ++session_id_;
 }
 
-Tape* Tape::Get(uint32_t tapeid) {
+Tape& Tape::Get(uint32_t tapeid) {
   // TODO(only single tape right now).
   static Tape tape(1);
-  return &tape;
+  return tape;
 }
 
 }  // namespace tape

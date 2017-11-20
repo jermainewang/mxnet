@@ -154,12 +154,15 @@ void MXImperativeInvokeImpl(AtomicSymbolCreator creator,
       num_outputs, infered_num_outputs, num_visible_outputs, outputs);
 
   auto state = Imperative::Get()->Invoke(Context::CPU(), attrs, ndinputs, ndoutputs);
-  //if (Imperative::Get()->is_recording()) {
-    //ag::RecordGradientInfo(attrs, ndinputs, ndoutputs, tape::Tape::Get(tape::kGradTape));
-  //}
+#ifdef USE_LEGACY_AUTOGRAD
   if (Imperative::Get()->is_recording()) {
     Imperative::Get()->RecordOp(std::move(attrs), ndinputs, ndoutputs, state);
   }
+#else
+  if (Imperative::Get()->is_recording()) {
+    ag::AutogradTape::Get().Record(attrs, ndinputs, ndoutputs);
+  }
+#endif
 
   for (int i = *num_outputs; i < infered_num_outputs; ++i) delete ndoutputs[i];
 
@@ -323,11 +326,12 @@ int MXAutogradIsRecording(bool* curr) {
 
 int MXAutogradSetIsRecording(int is_recording, int* prev) {
   API_BEGIN();
+#ifndef USE_LEGACY_AUTOGRAD
   if (Imperative::Get()->is_recording() && is_recording == false) {
     // Turning off previous recording tape.
-    // TODO(minjie): tape id.
-    tape::Tape::Get(0)->NewSession();
+    ag::AutogradTape::Get().NewSession();
   }
+#endif
   *prev = Imperative::Get()->set_is_recording(static_cast<bool>(is_recording));
   API_END();
 }
@@ -337,6 +341,7 @@ int MXAutogradMarkVariables(mx_uint num_var,
                             mx_uint *reqs_array,
                             NDArrayHandle *grad_handles) {
   API_BEGIN();
+#ifdef USE_LEGACY_AUTOGRAD
   std::vector<NDArray*> variables, gradients;
   std::vector<mx_uint> grad_reqs;
   variables.reserve(num_var);
@@ -348,6 +353,15 @@ int MXAutogradMarkVariables(mx_uint num_var,
     grad_reqs.emplace_back(reqs_array[i]);
   }
   Imperative::Get()->MarkVariables(variables, grad_reqs, gradients);
+#else
+  for (mx_uint i = 0; i < num_var; ++i) {
+    NDArray* var = static_cast<NDArray*>(var_handles[i]);
+    NDArray* grad = static_cast<NDArray*>(grad_handles[i]);
+    OpReqType req = static_cast<OpReqType>(reqs_array[i]);
+    var->AttachGrad(req, *grad);
+    ag::AutogradTape::Get().AttachGrad(var->tape_entry_id(), req, *grad);
+  }
+#endif
   API_END();
 }
 
@@ -378,7 +392,11 @@ int MXAutogradBackwardEx(mx_uint num_output,
   MXAPIThreadLocalEntry *ret = MXAPIThreadLocalStore::Get();
   API_BEGIN();
 
+#ifdef USE_LEGACY_AUTOGRAD
   std::vector<NDArray*> outputs, ograds, variables;
+#else
+  std::vector<const NDArray*> outputs, ograds, variables;
+#endif
   outputs.reserve(num_output);
   for (mx_uint i = 0; i < num_output; ++i) {
     outputs.emplace_back(reinterpret_cast<NDArray*>(output_handles[i]));
@@ -398,11 +416,7 @@ int MXAutogradBackwardEx(mx_uint num_output,
     variables.emplace_back(reinterpret_cast<NDArray*>(var_handles[i]));
   }
 
-  // TODO(minjie): >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-  //ag::GenerateBackwardGraph(*tape::Tape::Get(tape::kGradTape), outputs, variables);
-  //LOG(FATAL) << "Not Implemented.";
-  // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-
+#ifdef USE_LEGACY_AUTOGRAD
   auto grads = Imperative::Get()->Backward(outputs, ograds, variables, is_train,
                                                   retain_graph, create_graph);
   if (num_variables != 0) {
@@ -417,6 +431,27 @@ int MXAutogradBackwardEx(mx_uint num_output,
     *grad_handles = dmlc::BeginPtr(ret->ret_handles);
     *grad_stypes = dmlc::BeginPtr(ret->out_types);
   }
+#else
+  nnvm::Graph bwd_graph = ag::AutogradTape::Get().GetSpecializedBackwardGraph(
+      outputs, variables, ograds);
+  // Get the required informations from the forward graph.
+  // Specialize by NDArray on backward graph.
+  // Evaluate the backward graph.
+  LOG(FATAL) << "Not Implemented.";
+
+  if (num_variables != 0) {
+    ret->ret_handles.clear();
+    ret->out_types.clear();
+    //ret->ret_handles.reserve(grads.size());
+    //ret->out_types.reserve(grads.size());
+    //for (const auto& i : grads) {
+      //ret->ret_handles.push_back(i);
+      //ret->out_types.push_back(i->storage_type());
+    //}
+    *grad_handles = dmlc::BeginPtr(ret->ret_handles);
+    *grad_stypes = dmlc::BeginPtr(ret->out_types);
+  }
+#endif
   API_END();
 }
 

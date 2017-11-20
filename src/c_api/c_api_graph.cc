@@ -87,7 +87,7 @@ void RunGraph(exec::GraphExecutorV2* exec,
     for (size_t i = 0; i < results.size(); ++i) {
       ndoutputs[i] = &results[i];
     }
-    ag::RecordGradientInfo(attrs, ndinputs, ndoutputs, tape::Tape::Get(tape::kGradTape));
+    ag::AutogradTape::Get().Record(attrs, ndinputs, ndoutputs);
   }
 
   if (rsts_ptr == nullptr) {

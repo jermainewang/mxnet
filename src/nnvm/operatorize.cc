@@ -28,6 +28,7 @@ Graph ExposeInvisibleOutputsRec(const Graph& graph) {
       }
     });
   LOG(INFO) << "#Invisible outputs: " << invisible_outputs.size();
+  LOG(INFO) << "#Visible outputs: " << graph.outputs.size();
   Graph new_graph;
   new_graph.outputs = graph.outputs;
   new_graph.global_attrs["num_visible_outputs"] =

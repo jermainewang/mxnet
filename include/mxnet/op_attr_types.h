@@ -32,13 +32,14 @@
 #include <functional>
 
 #include "./base.h"
-#include "./ndarray.h"
 #include "./engine.h"
 #include "./resource.h"
 
 namespace mxnet {
 
 using nnvm::NodeAttrs;
+
+class NDArray;
 
 /*! \brief operation request type to Forward and Backward */
 enum OpReqType {

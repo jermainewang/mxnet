@@ -639,6 +639,8 @@ Graph MXPlanMemory(Graph&& graph) {
   for (size_t match_range = min_match_range; match_range <= max_match_range; match_range *= 2) {
     // Make a copy of related fields
     ColumnRef<StorageRef> storage_ref =
+      graph.entry_attrs.count(plan_memory::ref_key) ?
+      graph.entry_attrs.GetColumn<StorageRef>(plan_memory::ref_key) :
       graph.CreateEntryColumn<StorageRef>({plan_memory::kNull, -1});
 
     // the allocator

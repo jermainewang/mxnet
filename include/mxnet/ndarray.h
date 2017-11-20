@@ -37,6 +37,7 @@
 #include "./base.h"
 #include "./storage.h"
 #include "./engine.h"
+#include "./op_attr_types.h"
 #if MKL_EXPERIMENTAL == 1
 #include <mkl_memory.h>
 #endif
@@ -530,8 +531,13 @@ class NDArray {
   NDArray Detach() const {
     NDArray ret(*this);
     ret.entry_ = nnvm::NodeEntry{nullptr, 0, 0};
+    ret.grad_req_type_ = kNullOp;
+    ret.grad_buffer_ = nullptr;
     return ret;
   }
+  void AttachGrad(OpReqType req_type, const NDArray& grad_buf);
+  bool HasGradAttached() const { return grad_req_type_ != kNullOp; }
+  std::pair<OpReqType, NDArray> GetAttachedGrad() const;
 
   nnvm::Symbol get_autograd_symbol() const;
   /*!
@@ -586,7 +592,7 @@ class NDArray {
   void set_tape_entry_id(tape::TapeEntryId tid) {
     tape_entry_id_ = tid;
   }
-  
+
   /*!
    * \brief Save list of ndarray into the Stream.x
    * \param fo The stream of output.
@@ -877,8 +883,13 @@ class NDArray {
   NDArrayStorageType storage_type_ = kUndefinedStorage;
   /*! \brief node entry for autograd */
   nnvm::NodeEntry entry_;
+
   /*! \brief Unique id of this NDArray on the tape. Default value means not taped at all.*/
   tape::TapeEntryId tape_entry_id_ = tape::kNotTaped;
+  // Used by attach_grad
+  OpReqType grad_req_type_ = kNullOp;
+  std::shared_ptr<Chunk> grad_buffer_{nullptr};
+
   /*!
    * \brief internal TBlob
    * \note When user access tblob_ by some const methods like

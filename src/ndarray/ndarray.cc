@@ -823,6 +823,23 @@ static const uint32_t NDARRAY_V1_MAGIC = 0xF993fac8;
 /* magic number for ndarray version 2, with storage type */
 static const uint32_t NDARRAY_V2_MAGIC = 0xF993fac9;
 
+void NDArray::AttachGrad(OpReqType req_type, const NDArray& grad_buf) {
+  grad_req_type_ = req_type;
+  grad_buffer_ = grad_buf.ptr_;
+}
+
+std::pair<OpReqType, NDArray> NDArray::GetAttachedGrad() const {
+  NDArray grad_buf;
+  grad_buf.shape_ = shape_;
+  grad_buf.dtype_ = dtype_;
+  grad_buf.storage_type_ = storage_type_;
+#if MKL_EXPERIMENTAL == 1
+  grad_buf.Mkl_mem_ = Mkl_mem_;
+#endif
+  grad_buf.ptr_ = grad_buffer_;
+  return std::make_pair(grad_req_type_, grad_buf);
+}
+
 void NDArray::Save(dmlc::Stream *strm) const {
   // write magic number to mark this version
   // for storage type
