@@ -434,9 +434,10 @@ int MXAutogradBackwardEx(mx_uint num_output,
 #else
   nnvm::Graph bwd_graph = ag::AutogradTape::Get().GetSpecializedBackwardGraph(
       outputs, variables, ograds);
-  // Get the required informations from the forward graph.
-  // Specialize by NDArray on backward graph.
   // Evaluate the backward graph.
+  // 0. Specialize for context.
+  // 1. Make the correct input and output args.
+
   LOG(FATAL) << "Not Implemented.";
 
   if (num_variables != 0) {

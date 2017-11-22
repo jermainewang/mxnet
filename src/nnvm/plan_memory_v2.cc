@@ -619,6 +619,9 @@ size_t PlanMemoryRec(const Graph& graph,
 
 // function to plan memory
 Graph MXPlanMemory(Graph&& graph) {
+  using plan_memory::MXPlanMemoryArgs;
+  const MXPlanMemoryArgs& args =
+    GetPassArgument<MXPlanMemoryArgs>(graph, plan_memory::arg_name);
   const auto* shape =
     graph.entry_attrs.GetColumn<TShape>(shape::key).get();
   const auto* dtype =
@@ -628,8 +631,16 @@ Graph MXPlanMemory(Graph&& graph) {
   const auto* ignored_inputs =
     graph.node_attrs.GetColumn<vector<uint32_t>>("ignored_inputs").get();
   const auto* device = graph.node_attrs.GetColumn<int>(ctx::device_key).get();
-
   const auto& idx = graph.indexed_graph();
+
+  // Create initial memory plan.
+  ColumnRef<StorageRef> init_plan =
+    graph.CreateEntryColumn<StorageRef>({plan_memory::kNull, -1});
+  for (uint32_t eid : args.external_entry_ids) {
+    init_plan.CopyOnWrite()->value[eid].storage_id = plan_memory::kExternalStorageID;
+  }
+
+  // Plan memory using different match ranges.
   size_t min_allocated_bytes = -1;
   ColumnRef<StorageRef> min_storage_ref;
   vector<Storage> min_storages;
@@ -638,10 +649,7 @@ Graph MXPlanMemory(Graph&& graph) {
          dmlc::GetEnv("NNVM_AUTO_SEARCH_MATCH_RANGE", false) ? 1 : max_match_range;
   for (size_t match_range = min_match_range; match_range <= max_match_range; match_range *= 2) {
     // Make a copy of related fields
-    ColumnRef<StorageRef> storage_ref =
-      graph.entry_attrs.count(plan_memory::ref_key) ?
-      graph.entry_attrs.GetColumn<StorageRef>(plan_memory::ref_key) :
-      graph.CreateEntryColumn<StorageRef>({plan_memory::kNull, -1});
+    ColumnRef<StorageRef> storage_ref = init_plan;
 
     // the allocator
     GraphAllocator allocator(&idx, match_range);
@@ -681,6 +689,7 @@ NNVM_REGISTER_PASS(MXPlanMemory)
 .describe("Plan the memory allocation of each node entries.")
 .set_body(MXPlanMemory)
 .set_change_graph(false)
+.set_argument(plan_memory::arg_name)
 .depend_entry_attr(shape::key)
 .depend_entry_attr(dtype::key)
 .depend_node_attr(inplace::key)

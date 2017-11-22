@@ -50,9 +50,9 @@ class InferAttrPass {
     const IndexedGraph& idx = graph->indexed_graph();
 
     if (fwd_attr_col != nullptr) {
-      CHECK(graph->global_attrs.count("gradient_entry_mapping"));
+      CHECK(graph->global_attrs.count("bwdent2fwdent"));
       const auto& grad_mapping =
-        graph->GetGlobalAttr<vector<uint32_t>>("gradient_entry_mapping");
+        graph->GetGlobalAttr<vector<uint32_t>>("bwdent2fwdent");
       CHECK_EQ(grad_mapping.size(), idx.num_node_entries());
       for (uint32_t eid = 0; eid < grad_mapping.size(); ++eid) {
         const uint32_t fwd_eid = grad_mapping[eid];
@@ -76,7 +76,10 @@ class InferAttrPass {
     for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
       for (size_t i = 0; i < idx[nid].source->num_outputs(); ++i) {
         uint32_t eid = idx.entry_id(nid, i);
-        LOG(INFO) << "\t" << idx[nid].source->attrs.name << " output#" << i << ": " << attr_col->value[eid];
+        LOG(INFO) << "\tE#" << eid << " N#" << nid << " "
+          << idx[nid].source->attrs.name
+          << "(" << (idx[nid].source->is_variable()? "var" : idx[nid].source->op()->name) << ")"
+          << " output#" << i << ": " << attr_col->value[eid];
       }
     }
     LOG(INFO) << "]";*/
@@ -110,6 +113,21 @@ class InferAttrPass {
         reverse = !reverse;  // Flip inference order.
       }
     }
+
+
+    /*LOG(INFO) << "Final attrs: [";
+    for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
+      for (size_t i = 0; i < idx[nid].source->num_outputs(); ++i) {
+        uint32_t eid = idx.entry_id(nid, i);
+        LOG(INFO) << "\tE#" << eid << " N#" << nid << " "
+          << idx[nid].source->attrs.name
+          << "(" << (idx[nid].source->is_variable()? "var" : idx[nid].source->op()->name) << ")"
+          << " output#" << i << ": " << attr_col->value[eid];
+      }
+    }
+    LOG(INFO) << "]";
+    LOG(FATAL) << "!!!!!!!!";*/
+
 
     // If this is a forward node and its gradient has been specialized. We
     // also inference the attribute of its backward graph. NOTE: this is
@@ -261,7 +279,16 @@ class InferAttrPass {
     const IndexedGraph& idx = graph->indexed_graph();
     static auto& is_backward = Op::GetAttr<TIsBackward>("TIsBackward");
     const Node* node = idx[nid].source;
-    if (is_backward.get(node->op(), false) && node->control_deps.size()) {
+    if (!graph->global_attrs.count("gradient_node_mapping")
+        && is_backward.get(node->op(), false)
+        && node->control_deps.size()
+        && !is_backward.get(node->control_deps[0]->op(), false)) {
+      // A legacy backward node is:
+      //  In the same graph of its forward node
+      //  AND is a backward op
+      //  AND has control dependency
+      //  AND first control dependency points to a forward op.
+      LOG(INFO) << node->attrs.name << " <-c- " << node->control_deps[0]->attrs.name;
       InferLegacyBackwardNode(graph, nid, attr);
     } else {
       InferNormalOpNode(graph, nid, attr);
@@ -272,7 +299,6 @@ class InferAttrPass {
       if (attr->value[idx.entry_id(node->inputs[i])] == empty_val_) {
         known = false;
       }
-      //LOG(INFO) << "\tFwd ent#" << idx.entry_id(inode.inputs[i]) << ": " << iattr[i];
     }
     for (uint32_t i = 0; known && i < node->num_outputs(); ++i) {
       if (attr->value[idx.entry_id(nid, i)] == empty_val_) {
@@ -477,7 +503,7 @@ Graph InferAttrHelper(Graph &&graph,
 Graph MXInferShape(Graph &&graph) {
   static const TShape empty_val = TShape();
   static const string finfer_name = "FInferShape";
-  const auto& args = GetPassArgument<shape::MXInferShapeArgs>(graph, "mx_infer_shape_args");
+  const auto& args = GetPassArgument<shape::MXInferShapeArgs>(graph, shape::arg_name);
   return InferAttrHelper<TShape>(std::move(graph),
                                  empty_val,
                                  finfer_name,
@@ -490,13 +516,13 @@ NNVM_REGISTER_PASS(MXInferShape)
 .describe("Infer the shape of each node entries.")
 .set_body(MXInferShape)
 .set_change_graph(false)
-.set_argument("mx_infer_shape_args")
+.set_argument(shape::arg_name)
 .provide_entry_attr(shape::key);
 
 Graph MXInferShapeAPI(Graph &&graph) {
   static const TShape empty_val = TShape();
   static const string finfer_name = "FInferShape";
-  const string& json_args = GetPassArgument<string>(graph, "mx_infer_shape_args_json");
+  const string& json_args = GetPassArgument<string>(graph, shape::json_arg_name);
   shape::MXInferShapeArgs args;
   istringstream is(json_args);
   dmlc::JSONReader reader(&is);
@@ -518,8 +544,8 @@ NNVM_REGISTER_PASS(MXInferShapeAPI)
 .describe("Infer the shape of each node entries.")
 .set_body(MXInferShapeAPI)
 .set_change_graph(false)
-.set_argument("mx_infer_shape_args_json")
-.provide_entry_attr("shape");
+.set_argument(shape::json_arg_name)
+.provide_entry_attr(shape::key);
 
 DMLC_JSON_ENABLE_ANY(ColumnRef<TShape>, column_shape);
 
@@ -527,7 +553,7 @@ DMLC_JSON_ENABLE_ANY(ColumnRef<TShape>, column_shape);
 Graph MXInferType(Graph &&graph) {
   static const int empty_val = -1;
   static const string finfer_name = "FInferType";
-  const auto& args = GetPassArgument<dtype::MXInferTypeArgs>(graph, "mx_infer_dtype_args");
+  const auto& args = GetPassArgument<dtype::MXInferTypeArgs>(graph, dtype::arg_name);
   return InferAttrHelper<int>(std::move(graph),
                               empty_val,
                               finfer_name,
@@ -540,13 +566,13 @@ NNVM_REGISTER_PASS(MXInferType)
 .describe("Infer the type of each node entries.")
 .set_body(MXInferType)
 .set_change_graph(false)
-.set_argument("mx_infer_dtype_args")
-.provide_entry_attr("dtype");
+.set_argument(dtype::arg_name)
+.provide_entry_attr(dtype::key);
 
 Graph MXInferTypeAPI(Graph &&graph) {
   static const int empty_val = -1;
   static const string finfer_name = "FInferType";
-  const string& json_args = GetPassArgument<string>(graph, "mx_infer_dtype_args_json");
+  const string& json_args = GetPassArgument<string>(graph, dtype::json_arg_name);
   dtype::MXInferTypeArgs args;
   istringstream is(json_args);
   dmlc::JSONReader reader(&is);
@@ -568,8 +594,8 @@ NNVM_REGISTER_PASS(MXInferTypeAPI)
 .describe("Infer the data type of each node entries.")
 .set_body(MXInferTypeAPI)
 .set_change_graph(false)
-.set_argument("mx_infer_dtype_args_json")
-.provide_entry_attr("dtype");
+.set_argument(dtype::json_arg_name)
+.provide_entry_attr(dtype::key);
 
 }  // namespace pass
 }  // namespace mxnet

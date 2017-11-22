@@ -18,7 +18,7 @@ namespace mxnet {
 namespace pass {
 namespace {
 
-nnvm::NodeEntry AggregateGradient(std::vector<nnvm::NodeEntry>&& v) {
+nnvm::NodeEntry AggregateGradient(std::vector<nnvm::NodeEntry> v) {
   using nnvm::Op;
   static size_t inplace_sum_cap = dmlc::GetEnv("MXNET_EXEC_INPLACE_GRAD_SUM_CAP", 8);
   static const Op* ewise_plus_op = Op::Get("_grad_add");
@@ -154,19 +154,23 @@ class GradEntry {
   void AddGrad(const NodeEntry& ent) {
     grads_.push_back(ent);
   }
-  NodeEntry GetSum() {
+  NodeEntry ComputeSum() {
     if (sum_.node == nullptr) {
       if (grads_.size() == 1) {
-        sum_ = std::move(grads_[0]);
+        sum_ = grads_[0];
       } else {
-        sum_ = AggregateGradient(std::move(grads_));
+        sum_ = AggregateGradient(grads_);
       }
     }
     return sum_;
   }
+
   bool IsNone() const {
     return sum_.node == nullptr && grads_.empty();
   }
+
+  const NodeEntry& sum() const { return sum_; }
+  const vector<NodeEntry> grads() const { return grads_; }
 
  private:
   NodeEntry sum_;
@@ -177,88 +181,24 @@ inline vector<NodeEntry> FetchSumGradients(vector<GradEntry>& ent) {
   vector<NodeEntry> ret;
   ret.reserve(ent.size());
   for (auto& e : ent) {
-    ret.push_back(e.GetSum());
+    ret.push_back(e.ComputeSum());
   }
   return ret;
 }
 
-const Node* FindLegacyBackwardNode(const vector<NodeEntry>& in_grads) {
-  static auto& is_backward = Op::GetAttr<TIsBackward>("TIsBackward");
-  static const Op* no_grad_op = Op::Get("_NoGradient");
-  if (in_grads.empty()) {
-    return nullptr;
-  }
-  const Node* bwd_node = in_grads[0].node.get();
-  for (const auto& e: in_grads) {
-    if (e.node->op() != no_grad_op && e.node.get() != bwd_node) {
-      // Legacy backward node should be the only node to generate
-      // input gradients.
-      return nullptr;
-    }
-  }
-  if (bwd_node->is_graph() ||
-      (is_backward.get(bwd_node->op(), false) && bwd_node->control_deps.size())) {
-    return bwd_node;
+void InsertF2BEntryMapping(const NodeEntry& e,
+                           NodeEntryMap<NodeEntry>* fwdent2bwdent) {
+  const NodePtr& node = e.node;
+  if (node->is_variable()) {
+    CHECK(node->control_deps.empty());
+    fwdent2bwdent->insert({e, e});
   } else {
-    return nullptr;
-  }
-}
-
-void SplitForwardBackward(
-    const vector<NodeEntry>& in_grads,
-    const IndexedGraph& fwd_graph_idx,
-    NodeEntryMap<NodeEntry>* fwdent2bwdent) {
-  unordered_set<const Node*> visited;
-  queue<Node*> search;
-  for (const NodeEntry& e : in_grads) {
-    search.push(e.node.get());
-  }
-  while (!search.empty()) {
-    Node* node = search.front();
-    search.pop();
-    if (fwd_graph_idx.exist(node)) {
-      // Nothing to be done for forward node.
-      continue;
-    }
-    if (visited.count(node)) {
-      continue;
-    }
-    visited.insert(node);
-    // Split data dependencies.
-    for (size_t i = 0; i < node->inputs.size(); ++i) {
-      const NodeEntry& in_ent = node->inputs[i];
-      const NodePtr& in_node = in_ent.node;
-      if (fwd_graph_idx.exist(in_node.get())) {
-        // The entry is between two forward and backward nodes.
-        // Replace the entry with a variable input.
-        if (!fwdent2bwdent->count(in_ent)) {
-          ostringstream oss;
-          if (in_node->is_variable()) {
-            oss << in_node->attrs.name;
-          } else {
-            oss << in_node->attrs.name << "$" << "output" << in_ent.index;
-          }
-          NodePtr new_in_node = Node::Create();
-          new_in_node->attrs.op = nullptr;
-          new_in_node->attrs.name = oss.str();
-          fwdent2bwdent->insert({in_ent,  NodeEntry{new_in_node, 0, 0}});
-        }
-        node->inputs[i] = fwdent2bwdent->at(in_ent);
-      } else {
-        // Traverse the input.
-        search.push(in_node.get());
-      }
-    }
-    // XXX(minjie): Remove control dependencies to forward graph? This should be
-    // fine since the backward subgraph will also have a control dependency to
-    // the forward subgraph.
-    auto& cdeps = node->control_deps;
-    cdeps.erase(std::remove_if(cdeps.begin(),
-                               cdeps.end(), 
-                               [&] (const NodePtr& prev) {
-                                 return fwd_graph_idx.exist(prev.get());
-                               }),
-                cdeps.end());
+    ostringstream oss;
+    oss << node->attrs.name << "$" << "output" << e.index;
+    NodePtr new_node = Node::Create();
+    new_node->attrs.op = nullptr;
+    new_node->attrs.name = oss.str();
+    fwdent2bwdent->insert({e, NodeEntry{new_node, 0, 0}});
   }
 }
 
@@ -319,7 +259,6 @@ enum GradMode {
 };
 }  // namespace grad
 
-using grad::MXEntryArg;
 using grad::MXGradientArgs;
 using grad::GradNodeInInfo;
 
@@ -411,6 +350,43 @@ vector<NodeEntry> ConvertToNodeEntry(
     entries.emplace_back(NodeEntry{nid2nodeptr.at(nid), idx_entries[i].index, 0});
   }
   return entries;
+}
+
+void SplitForwardBackward(
+    Graph* full_graph,
+    const IndexedGraph& fwd_graph_idx,
+    NodeEntryMap<NodeEntry>* fwdent2bwdent,
+    unordered_map<const Node*, const Node*>* legacy_bwd2fwd) {
+  vector<NodePtr> topo_order;
+  DFSVisit(full_graph->outputs, [&] (const NodePtr& node) {
+      topo_order.push_back(node);
+      });
+  for (const NodePtr& node : topo_order) {
+    if (fwd_graph_idx.exist(node.get())) {
+      continue;
+    }
+    for (uint32_t i = 0; i < node->inputs.size(); ++i) {
+      const auto& ent = node->inputs[i];
+      if (fwd_graph_idx.exist(ent.node.get())) {
+        if (!fwdent2bwdent->count(ent)) {
+          InsertF2BEntryMapping(ent, fwdent2bwdent);
+        }
+        node->inputs[i] = fwdent2bwdent->at(ent);
+      }
+    }
+    if (!node->control_deps.empty()
+        && fwd_graph_idx.exist(node->control_deps[0].get())) {
+      legacy_bwd2fwd->insert({node.get(), node->control_deps[0].get()});
+    }
+    // Remove control dependencies to forward graph.
+    auto& cdeps = node->control_deps;
+    cdeps.erase(std::remove_if(cdeps.begin(),
+          cdeps.end(), 
+          [&] (const NodePtr& prev) {
+            return fwd_graph_idx.exist(prev.get());
+          }),
+        cdeps.end());
+  }
 }
 
 Graph GradientRec(const Graph& fwd_graph,
@@ -509,14 +485,7 @@ Graph GradientRec(const Graph& fwd_graph,
     CHECK_EQ(node->inputs.size(), in_grads.size())
         << "Gradient function for node \"" << node->attrs.name
         << "\" does not return enough gradient entries.";
-    const Node* legacy_bwd_node = FindLegacyBackwardNode(in_grads);
-    if (legacy_bwd_node) {
-      legacy_bwd2fwd[legacy_bwd_node] = node.get();
-    }
-    if (mode != grad::kFullGraph
-        && mode != grad::kFullGraphWithOutput) {
-      SplitForwardBackward(in_grads, fwd_graph_idx, &fwdent2bwdent);
-    }
+    
     // Save input gradients.
     for (size_t i = 0; i < node->inputs.size(); ++i) {
       const NodeEntry& in_ent = node->inputs[i];
@@ -539,7 +508,7 @@ Graph GradientRec(const Graph& fwd_graph,
     for (const auto& e : xs) {
       const Node* n = fwd_graph_idx[e.node_id].source;
       GradEntry& ge = node2outgrads.at(n)[e.index];
-      grad_g_vis_outputs.push_back(ge.GetSum());
+      grad_g_vis_outputs.push_back(ge.ComputeSum());
     }
     grad_g->global_attrs["num_visible_outputs"] =
       std::make_shared<any>(grad_g_vis_outputs.size());
@@ -548,14 +517,38 @@ Graph GradientRec(const Graph& fwd_graph,
                            grad_g_invis_outputs.begin(),
                            grad_g_invis_outputs.end());
   }
+
+
   if (mode == grad::kFullGraph || mode == grad::kFullGraphWithOutput) {
     return *grad_g;
+  } else {
+    SplitForwardBackward(grad_g.get(),
+                         fwd_graph_idx,
+                         &fwdent2bwdent,
+                         &legacy_bwd2fwd);
   }
 
-  const auto& grad_g_idx = grad_g->indexed_graph();
+  const auto& bwd_graph_idx = grad_g->indexed_graph();
+  for (uint32_t nid = 0; nid < bwd_graph_idx.num_nodes(); ++nid) {
+    const auto* node = bwd_graph_idx[nid].source;
+    //LOG(INFO) << "#" << nid << " " << node->attrs.name << " " << (node->is_variable()? "var" : node->op()->name);
+    //LOG(INFO) << bwd_graph_idx[nid].control_deps.size() << " v.s. " <<  node->control_deps.size();
+    CHECK_EQ(bwd_graph_idx[nid].control_deps.size(), node->control_deps.size());
+    //for (const auto& in : node->inputs) {
+      //LOG(INFO) << "\t<-" << in.node->attrs.name;
+    //}
+    //for (const auto& n : node->control_deps) {
+      //LOG(INFO) << "\t<c-" << n->attrs.name;
+      //if (!fwd_graph_idx.exist(n.get())) {
+        //LOG(FATAL) << "Found bwd2bwd control dep: " << n->attrs.name << " -> " << node->attrs.name;
+      //}
+    //}
+  }
+  //LOG(FATAL) << "!!!!";*/
 
   // Create new forward graph.
   Graph new_fwd_graph;
+  NodeEntryMap<size_t> all_fwd_outputs;
   {
     // TODO(minjie): refactor into a function.
     size_t num_fwd_vis_outputs = fwd_graph.outputs.size();
@@ -566,15 +559,10 @@ Graph GradientRec(const Graph& fwd_graph,
     new_fwd_graph.global_attrs["num_visible_outputs"]
       = std::make_shared<any>(num_fwd_vis_outputs);
     // 2. First inserts visible outputs.
-    NodeEntrySet all_fwd_outputs;
     for (size_t i = 0; i < fwd_graph.outputs.size(); ++i) {
       const NodeEntry& outent = fwd_graph.outputs[i];
+      all_fwd_outputs.insert({outent, new_fwd_graph.outputs.size()});
       new_fwd_graph.outputs.push_back(outent);
-      all_fwd_outputs.insert(outent);
-      if (fwdent2bwdent.count(outent)) {
-        const Node* bwdvar = fwdent2bwdent[outent].node.get();
-        inent_map[bwdvar] = GradNodeInInfo::CreateFromForwardOut(i);
-      }
     }
     // 3. Insert invisible outputs used by gradient graph.
     for (const auto& kv : fwdent2bwdent) {
@@ -587,85 +575,102 @@ Graph GradientRec(const Graph& fwd_graph,
         continue;
       }
       // New forward output entry.
-      all_fwd_outputs.insert(fwd_ent);
-      const size_t idx = new_fwd_graph.outputs.size();
+      all_fwd_outputs.insert({fwd_ent, new_fwd_graph.outputs.size()});
       new_fwd_graph.outputs.push_back(fwd_ent);
-      const Node* bwdvar = kv.second.node.get();
-      inent_map[bwdvar] = GradNodeInInfo::CreateFromForwardOut(idx);
     }
-  }
-  const auto& new_fwd_graph_idx = new_fwd_graph.indexed_graph();
-
-  // Compute how the input entries of the gradient graph come from.
-  vector<GradNodeInInfo> inent_info;
-  // 1. Come from the inputs of the forward graph.
-  const vector<uint32_t>& new_fwd_in_nodes = new_fwd_graph_idx.input_nodes();
-  for (const auto& kv : fwdent2bwdent) {
-    const NodeEntry& fwd_ent = kv.first;
-    if (fwd_ent.node->is_variable()) {
-      const uint32_t nid = new_fwd_graph_idx.node_id(fwd_ent.node.get());
-      const auto it = std::find(new_fwd_in_nodes.begin(),
-                                new_fwd_in_nodes.end(),
-                                nid);
-      CHECK(it != new_fwd_in_nodes.end());
-      const size_t idx = it - new_fwd_in_nodes.begin();
-      const Node* bwdvar = kv.second.node.get();
-      inent_map[bwdvar] = GradNodeInInfo::CreateFromForwardIn(idx);
-    }
-  }
-  // 2. Come from the outputs of the forward graph (both visible and invisible).
-  for (const uint32_t grad_in_nid : grad_g_idx.input_nodes()) {
-    const Node* grad_in_node = grad_g_idx[grad_in_nid].source;
-    CHECK(grad_in_node->is_variable());
-    CHECK(inent_map.count(grad_in_node))
-      << "Cannot find way to feed input node \""
-      << grad_in_node->attrs.name << "\" of the gradient graph.";
-    inent_info.push_back(std::move(inent_map[grad_in_node]));
   }
 
-  // Compute how the output entries of the gradient graph come from.
-  vector<GradNodeOutInfo> outent_info;
-  unordered_map<uint32_t, size_t> bwdoutnid2index;
-  for (size_t i = 0; i < xs.size(); ++i) {
-    bwdoutnid2index[xs[i].node_id] = i;
-  }
-  for (const uint32_t fwd_in_nid : new_fwd_graph_idx.input_nodes()) {
-    if (bwdoutnid2index.count(fwd_in_nid)) {
-      const size_t bwdidx = bwdoutnid2index[fwd_in_nid];
-      outent_info.emplace_back(GradNodeOutInfo::CreateFromBackwardOut(bwdidx));
-    } else {
-      outent_info.emplace_back(GradNodeOutInfo::CreateFromZero());
+  {
+    const auto& grad_g_idx = grad_g->indexed_graph();
+    const auto& new_fwd_graph_idx = new_fwd_graph.indexed_graph();
+    // Compute how the input entries of the gradient graph come from.
+    vector<GradNodeInInfo> inent_info;
+    const vector<uint32_t>& new_fwd_in_nodes = new_fwd_graph_idx.input_nodes();
+    for (const auto& kv : fwdent2bwdent) {
+      const NodeEntry& fwd_ent = kv.first;
+      const Node* bwdvar = kv.second.node.get();
+      if (fwd_ent.node->is_variable()) {
+        // Come from the inputs of the forward graph.
+        const uint32_t nid = new_fwd_graph_idx.node_id(fwd_ent.node.get());
+        const auto it = std::find(new_fwd_in_nodes.begin(),
+                                  new_fwd_in_nodes.end(),
+                                  nid);
+        CHECK(it != new_fwd_in_nodes.end());
+        const size_t idx = it - new_fwd_in_nodes.begin();
+        inent_map[bwdvar] = GradNodeInInfo::CreateFromForwardIn(idx);
+      } else {
+        // Come from the outputs of the forward graph (both visible and invisible).
+        const size_t idx = all_fwd_outputs.at(fwd_ent);
+        inent_map[bwdvar] = GradNodeInInfo::CreateFromForwardOut(idx);
+      }
     }
+    for (const uint32_t grad_in_nid : grad_g_idx.input_nodes()) {
+      const Node* grad_in_node = grad_g_idx[grad_in_nid].source;
+      CHECK(grad_in_node->is_variable());
+      CHECK(inent_map.count(grad_in_node))
+        << "Cannot find way to feed input node \""
+        << grad_in_node->attrs.name << "\" of the gradient graph.";
+      inent_info.push_back(std::move(inent_map[grad_in_node]));
+    }
+
+    // Compute how the output entries of the gradient graph come from.
+    vector<GradNodeOutInfo> outent_info;
+    unordered_map<uint32_t, size_t> bwdoutnid2index;
+    for (size_t i = 0; i < xs.size(); ++i) {
+      bwdoutnid2index[xs[i].node_id] = i;
+    }
+    for (const uint32_t fwd_in_nid : new_fwd_graph_idx.input_nodes()) {
+      if (bwdoutnid2index.count(fwd_in_nid)) {
+        const size_t bwdidx = bwdoutnid2index[fwd_in_nid];
+        outent_info.emplace_back(GradNodeOutInfo::CreateFromBackwardOut(bwdidx));
+      } else {
+        outent_info.emplace_back(GradNodeOutInfo::CreateFromZero());
+      }
+    }
+    grad_g->global_attrs["grad_node_in_info"] = std::make_shared<any>(std::move(inent_info));
+    grad_g->global_attrs["grad_node_out_info"] = std::make_shared<any>(std::move(outent_info));
   }
 
   // Attributes that are stored in the gradient graph.
   // 1. Create mapping between entries that have gradient relations. The mapping
   // is stored as a vector from backward entry id to forward entry id. 
+  // Note: This is a multi-map. A forward entry will map to *all* backward entries that
+  //   contrinute to its gradient.
   {
     // TODO(minjie): refactor into a function.
-    const uint32_t default_val = new_fwd_graph_idx.num_node_entries();
-    vector<uint32_t> mapping(grad_g_idx.num_node_entries(), default_val);
+    const auto& grad_g_idx = grad_g->indexed_graph();
+    const auto& new_fwd_graph_idx = new_fwd_graph.indexed_graph();
+    vector<uint32_t> bwdent2fwdent(grad_g_idx.num_node_entries(),
+                                   new_fwd_graph_idx.num_node_entries());
+    vector<vector<uint32_t>> fwdent2bwdent(new_fwd_graph_idx.num_node_entries());
     for (uint32_t nid = 0; nid < new_fwd_graph_idx.num_nodes(); ++nid) {
       const Node* fwd_node = new_fwd_graph_idx[nid].source;
       for (size_t i = 0; i < node2outgrads[fwd_node].size(); ++i) {
-        const NodeEntry& ent = node2outgrads[fwd_node][i].GetSum();
-        const Node* bwd_node = ent.node.get();
-        if (!grad_g_idx.exist(bwd_node)) {
-          continue;
-        }
-        const uint32_t bwdeid = grad_g_idx.entry_id(ent);
         const uint32_t fwdeid = new_fwd_graph_idx.entry_id(nid, i);
-        mapping[bwdeid] = fwdeid;
+        vector<NodeEntry> grads = node2outgrads[fwd_node][i].grads();
+        grads.push_back(node2outgrads[fwd_node][i].sum());
+        for (const auto& ent : grads) {
+          if (ent.node != nullptr && grad_g_idx.exist(ent.node.get())) {
+            const Node* bwd_node = ent.node.get();
+            const uint32_t bwdeid = grad_g_idx.entry_id(ent);
+            bwdent2fwdent[bwdeid] = fwdeid;
+            fwdent2bwdent[fwdeid].push_back(bwdeid);
+          }
+        }
       }
     }
-    grad_g->global_attrs["gradient_entry_mapping"] =
-      std::make_shared<any>(std::move(mapping));
+    grad_g->global_attrs["bwdent2fwdent"] =
+      std::make_shared<any>(std::move(bwdent2fwdent));
+    grad_g->global_attrs["fwdent2bwdent"] =
+      std::make_shared<any>(std::move(fwdent2bwdent));
   }
 
   // 2. Create mapping between entries that have feeding relations. The mapping
   // is stored as a vector from backward entry id to forward entry id.
   {
     // TODO(minjie): refactor into a function.
+    const auto& grad_g_idx = grad_g->indexed_graph();
+    const auto& new_fwd_graph_idx = new_fwd_graph.indexed_graph();
     const uint32_t default_val = new_fwd_graph_idx.num_node_entries();
     vector<uint32_t> mapping(grad_g_idx.num_node_entries(), default_val);
     for (const auto& kv : fwdent2bwdent) {
@@ -682,6 +687,8 @@ Graph GradientRec(const Graph& fwd_graph,
   // to forward node id.
   {
     // TODO(minjie): refactor into a function.
+    const auto& grad_g_idx = grad_g->indexed_graph();
+    const auto& new_fwd_graph_idx = new_fwd_graph.indexed_graph();
     const uint32_t default_val = new_fwd_graph_idx.num_nodes();
     vector<uint32_t> mapping(grad_g_idx.num_nodes(), default_val);
     for (const auto& kv : legacy_bwd2fwd) {
@@ -698,9 +705,13 @@ Graph GradientRec(const Graph& fwd_graph,
   }
 
   // Register FGradient for the graph. Note that all local variables must be passed by value.
-  FGradient graph_fgrad = [grad_g, inent_info, outent_info]
+  FGradient graph_fgrad = [grad_g]
     (const NodePtr& fwd_node, const vector<NodeEntry>& out_grads) {
       CHECK(fwd_node->is_graph());
+      const auto& inent_info =
+        grad_g->GetGlobalAttr<vector<GradNodeInInfo>>("grad_node_in_info");
+      const auto& outent_info =
+        grad_g->GetGlobalAttr<vector<GradNodeOutInfo>>("grad_node_out_info");
       NodePtr grad_node = Node::Create();
       grad_node->attrs.name = fwd_node->attrs.name + "/backward";
       grad_node->attrs.graph = grad_g;
@@ -744,9 +755,11 @@ Graph GradientRec(const Graph& fwd_graph,
       return ret;
     };
 
-  FBackwardDependency graph_fbwddep = [grad_g, inent_info, outent_info]
+  FBackwardDependency graph_fbwddep = [grad_g]
     (const nnvm::Node* fwd_node, vector<bool>* saved_inputs, vector<bool>* saved_outputs) {
       CHECK(fwd_node->is_graph());
+      const auto& inent_info =
+        grad_g->GetGlobalAttr<vector<GradNodeInInfo>>("grad_node_in_info");
       saved_inputs->resize(fwd_node->inputs.size(), false);
       saved_outputs->resize(fwd_node->num_outputs(), false);
       for (const auto& info : inent_info) {
@@ -863,9 +876,12 @@ NNVM_REGISTER_PASS(MXGradientOnlyBackward)
 .set_body(MXGradientOnlyBackward)
 .set_change_graph(true)
 .set_argument("mx_gradient_args")
-.provide_global_attr("gradient_entry_mapping")
+.provide_global_attr("bwdent2fwdent")
+.provide_global_attr("fwdent2bwdent")
 .provide_global_attr("gradient_node_mapping")
 .provide_global_attr("feed_entry_mapping")
+.provide_graph_attr("grad_node_in_info")
+.provide_graph_attr("grad_node_out_info")
 ;
 
 // Register pass for json inputs.
@@ -899,9 +915,12 @@ NNVM_REGISTER_PASS(MXGradientOnlyBackwardJSON)
 .set_body(MXGradientOnlyBackwardJSON)
 .set_change_graph(true)
 .set_argument("mx_gradient_args_json")
-.provide_global_attr("gradient_entry_mapping")
+.provide_global_attr("bwdent2fwdent")
+.provide_global_attr("fwdent2bwdent")
 .provide_global_attr("gradient_node_mapping")
 .provide_global_attr("feed_entry_mapping")
+.provide_graph_attr("grad_node_in_info")
+.provide_graph_attr("grad_node_out_info")
 ;
 
 }  // namespace pass

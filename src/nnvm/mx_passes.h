@@ -15,8 +15,6 @@
 
 namespace mxnet {
 namespace pass {
-
-namespace grad {
 struct MXEntryArg {
   uint32_t node = 0;
   uint32_t index = 0;
@@ -30,6 +28,7 @@ struct MXEntryArg {
   }
 };
 
+namespace grad {
 // TODO(minjie): support multiple partial derivative.
 struct MXGradientArgs {
   // The targets to be differentiated. If none is given,
@@ -98,9 +97,12 @@ struct GradNodeInInfo {
     return ret;
   }
 };
+
 }  // namespace grad
 
 namespace shape {
+static const std::string arg_name = "mx_infer_shape_args";
+static const std::string json_arg_name = "mx_infer_shape_args_json";
 static const std::string key = "shape";
 struct MXInferShapeArgs {
   // Shapes of the input entries.
@@ -126,6 +128,8 @@ struct MXInferShapeArgs {
 }  // namespace shape
 
 namespace dtype {
+static const std::string arg_name = "mx_infer_dtype_args";
+static const std::string json_arg_name = "mx_infer_dtype_args_json";
 static const std::string key = "dtype";
 struct MXInferTypeArgs {
   // Types of the input entries.
@@ -173,6 +177,7 @@ static const std::string key = "mutate_index";
 }  // namespace mutate
 
 namespace plan_memory {
+static const std::string arg_name = "mx_plan_memory_args";
 static const std::string ref_key = "storage_ref";
 static const std::string storage_key = "storage";
 // Special storage id when storage cannot be assigned due to many reasons
@@ -190,6 +195,9 @@ struct Storage {
   int id;
   int device_id;
   size_t max_bytes;
+};
+struct MXPlanMemoryArgs {
+  std::vector<uint32_t> external_entry_ids;
 };
 }  // namespace plan_memory
 }  // namespace pass

@@ -105,6 +105,7 @@ void _SpecializeByNDArrays(nnvm::Graph* graph, int num_arrays, NDArrayHandle *ar
   using nnvm::any;
   using pass::shape::MXInferShapeArgs;
   using pass::dtype::MXInferTypeArgs;
+  using pass::plan_memory::MXPlanMemoryArgs;
   std::unordered_map<std::string, std::shared_ptr<any>> kwargs_any;
   std::vector<TShape> shape_inputs(num_arrays, TShape());
   std::vector<int> dtype_inputs(num_arrays, -1);
@@ -119,8 +120,8 @@ void _SpecializeByNDArrays(nnvm::Graph* graph, int num_arrays, NDArrayHandle *ar
   MXInferTypeArgs dtype_args;
   shape_args.shape_inputs = std::move(shape_inputs);
   dtype_args.dtype_inputs = std::move(dtype_inputs);
-  kwargs_any["mx_infer_shape_args"] = std::make_shared<any>(std::move(shape_args));
-  kwargs_any["mx_infer_dtype_args"] = std::make_shared<any>(std::move(dtype_args));
+  kwargs_any[pass::shape::arg_name] = std::make_shared<any>(std::move(shape_args));
+  kwargs_any[pass::dtype::arg_name] = std::make_shared<any>(std::move(dtype_args));
   nnvm::Specialize(graph, kwargs_any);
 }
 
