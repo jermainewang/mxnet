@@ -87,7 +87,7 @@ def test_lstm():
     N = 1
     hidden_size = 128
     input_size = 8
-    length = 20
+    length = 100
     data = [nd.zeros((N, input_size), ctx=ctx) for i in range(length)]
     lstm = TrashLossLSTM(hidden_size, input_size)
     #lstm.hybridize()

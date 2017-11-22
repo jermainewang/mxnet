@@ -24,14 +24,15 @@ void AutogradTape::SaveInfo(const NDArray* nd, bool save_value) {
   if (!aginfo.saved) {
     aginfo.shape = nd->shape();
     aginfo.dtype = nd->dtype();
-    if (save_value) {
-      aginfo.value = *nd;
-    }
+    
     if (nd->HasGradAttached()) {
       tie(aginfo.req_type, aginfo.grad_buffer) = nd->GetAttachedGrad();
       grad_attached_entries_.push_back(nd->tape_entry_id());
     }
     aginfo.saved = true;
+  }
+  if (save_value && aginfo.value.is_none()) {
+    aginfo.value = *nd;
   }
 }
 
@@ -266,8 +267,6 @@ Graph AutogradTape::GetSpecializedBackwardGraph(
       break;
     case GradNodeInInfo::kFromFwdOut:
       {
-      LOG(INFO) << "FwdOut: " << fwd_graph.outputs[info.index].node->attrs.name
-        << "#" << fwd_graph.outputs[info.index].index;
       const uint32_t eid = fwd_graph_idx.entry_id(fwd_graph.outputs[info.index]);
       CHECK(!values->value[eid].is_none());
       arguments.push_back(values->value[eid]);
