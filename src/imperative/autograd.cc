@@ -94,26 +94,22 @@ void AutogradTape::AttachGrad(tape::TapeEntryId teid,
   }
 }
 
-Graph AutogradTape::GetForwardGraph(const vector<const NDArray*>& ys,
-                                    const vector<const NDArray*>& xs) {
-  using pass::grad::MXGradientArgs;
-  using pass::MXEntryArg;
-
-  tape::Tape& grad_tape = tape::Tape::Get(tape::kGradTape);
-  Graph graph = grad_tape.GetGraph(ys);
-  unordered_map<string, shared_ptr<any>> kwargs_any;
-  graph = nnvm::Transform(graph, {"MXExposeInvisibleOutputs"}, kwargs_any);
-
+vector<NodeEntry> AutogradTape::GetGradTargets(
+    const vector<const NDArray*>& xs) const {
+  vector<NodeEntry> xs_entries;
+  tape::Tape& tape = tape::Tape::Get(tape::kGradTape);
   uint32_t tapeid = 0, pos = 0, index = 0, sid = 0;
-
-  std::vector<tape::TapeEntryId> xs_teid;
   if (!xs.empty()) {
     // Compute gradients for all provided xs.
-    // TODO(minjie): undefined behaviors when variables are provided
-    // to compute gradient on. This may conflict the attached grad entries.
+    // TODO(minjie): what happened if the provided variables to compute gradients
+    //   of are different from the variables that have grad buffers attached?
     LOG(FATAL) << "#provided variables=" << xs.size();
     for (const NDArray* x : xs) {
-      xs_teid.push_back(x->tape_entry_id());
+      const auto teid = x->tape_entry_id();
+      std::tie(tapeid, pos, index, sid) = tape::ParseTapeEntryId(teid);
+      CHECK_EQ(tapeid, tape::kGradTape);
+      CHECK_EQ(sid, tape.session_id());
+      xs_entries.emplace_back(NodeEntry{tape[pos].node, index, 0});
     }
   } else {
     // Compute gradients for all grad-attached variables.
@@ -121,17 +117,31 @@ Graph AutogradTape::GetForwardGraph(const vector<const NDArray*>& ys,
     //   Their gradient values will be stored in the provided buffers.
     for (auto teid : grad_attached_entries_) {
       std::tie(tapeid, pos, index, sid) = tape::ParseTapeEntryId(teid);
+      CHECK_EQ(tapeid, tape::kGradTape);
+      CHECK_EQ(sid, tape.session_id());
       if (saved_info_[pos][index].req_type != kNullOp) {
-        xs_teid.push_back(teid);
+        xs_entries.emplace_back(NodeEntry{tape[pos].node, index, 0});
       }
     }
   }
+  return xs_entries;
+}
 
+Graph AutogradTape::SpecializeForwardGraph(
+    Graph graph,
+    const vector<NodeEntry>& xs_entries) {
+  using pass::grad::MXGradientArgs;
+  using pass::MXEntryArg;
+
+  tape::Tape& grad_tape = tape::Tape::Get(tape::kGradTape);
+  unordered_map<string, shared_ptr<any>> kwargs_any;
+  graph = nnvm::Transform(graph, {"MXExposeInvisibleOutputs"}, kwargs_any);
+
+  uint32_t tapeid = 0, pos = 0, index = 0, sid = 0;
   const auto& idx = graph.indexed_graph();
   MXGradientArgs args;
-  for (auto teid : xs_teid) {
-    std::tie(tapeid, pos, index, sid) = tape::ParseTapeEntryId(teid);
-    const uint32_t nid = idx.node_id(grad_tape[pos].node.get());
+  for (const auto& ent : xs_entries) {
+    const uint32_t nid = idx.node_id(ent.node.get());
     MXEntryArg entarg;
     entarg.node = nid;
     entarg.index = index;
@@ -173,11 +183,13 @@ Graph AutogradTape::GetSpecializedBackwardGraph(
     const vector<const NDArray*>& ys,
     const vector<const NDArray*>& xs,
     const vector<const NDArray*>& ys_grad) {
+  using pass::grad::GradNodeInInfo;
   using pass::shape::MXInferShapeArgs;
   using pass::dtype::MXInferTypeArgs;
   using pass::plan_memory::MXPlanMemoryArgs;
-  using pass::MXEntryArg;
-  Graph fwd_graph = GetForwardGraph(ys, xs);
+  tape::Tape& grad_tape = tape::Tape::Get(tape::kGradTape);
+  const auto& xs_entries = GetGradTargets(xs);
+  Graph fwd_graph = SpecializeForwardGraph(grad_tape.GetGraph(ys), xs_entries);
   GraphPtr bwd_graph = fwd_graph.GetGlobalAttr<GraphPtr>("gradient_graph");
   const auto& fwd_graph_idx = fwd_graph.indexed_graph();
   const auto& bwd_graph_idx = bwd_graph->indexed_graph();
@@ -198,7 +210,6 @@ Graph AutogradTape::GetSpecializedBackwardGraph(
     }
   }*/
 
-  tape::Tape& tape = tape::Tape::Get(tape::kGradTape);
   // Create shape/type/value columns of the forward graph.
   MXInferShapeArgs shape_args;
   MXInferTypeArgs dtype_args;
@@ -249,7 +260,6 @@ Graph AutogradTape::GetSpecializedBackwardGraph(
   auto grad_buffers = fwd_graph.entry_attrs.MoveColumn<NDArray>("grad_buffer");
   auto req_type = fwd_graph.entry_attrs.MoveColumn<OpReqType>("op_req");
   // Pack all inputs.
-  using pass::grad::GradNodeInInfo;
   const auto& in_info = bwd_graph->GetGlobalAttr<vector<GradNodeInInfo>>("grad_node_in_info");
   vector<NDArray> arguments;
   for (const auto& info : in_info) {
@@ -286,7 +296,15 @@ Graph AutogradTape::GetSpecializedBackwardGraph(
     }
   }
   // Pack all outputs.
-
+  vector<NDArray> results;
+  vector<OpReqType> result_reqs;
+  for (const auto& ent : xs_entries) {
+    const uint32_t eid = fwd_graph_idx.entry_id(ent);
+    CHECK(!grad_buffers->value[eid].is_none());
+    CHECK(req_type->value[eid] != kNullOp);
+    results.emplace_back(grad_buffers->value[eid]);
+    result_reqs.emplace_back(req_type->value[eid]);
+  }
   return *bwd_graph;
 }
 

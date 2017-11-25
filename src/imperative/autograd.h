@@ -23,19 +23,6 @@ class AutogradTape {
 
   void AttachGrad(tape::TapeEntryId teid, OpReqType req_type, const NDArray& grad_buf);
 
-  nnvm::Graph GetForwardGraph(const std::vector<const NDArray*>& ys,
-                              const std::vector<const NDArray*>& xs);
-
-  // ys cannot be empty. If xs is empty, the returned graph will compute
-  // gradients for all grad-attached entries.
-  nnvm::Graph GetFullGraph(const std::vector<const NDArray*>& ys,
-                           const std::vector<const NDArray*>& xs);
-
-  // ys cannot be empty. If xs is empty, the returned graph will compute
-  // gradients for all grad-attached entries.
-  nnvm::Graph GetBackwardGraph(const std::vector<const NDArray*>& ys,
-                               const std::vector<const NDArray*>& xs);
-
   // ys cannot be empty. If xs is empty, the returned graph will compute
   // gradients for all grad-attached entries.
   nnvm::Graph GetSpecializedBackwardGraph(
@@ -52,6 +39,13 @@ class AutogradTape {
   static AutogradTape& Get();
 
  private:
+  std::vector<nnvm::NodeEntry> GetGradTargets(
+      const std::vector<const NDArray*>& xs) const;
+
+  nnvm::Graph SpecializeForwardGraph(
+      nnvm::Graph graph,
+      const std::vector<nnvm::NodeEntry>& xs);
+
   void SaveInfo(const NDArray* nd, bool save_value);
 
   std::vector<tape::TapeEntryId> grad_attached_entries_;
