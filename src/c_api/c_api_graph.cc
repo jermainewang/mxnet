@@ -44,6 +44,7 @@ void RunGraph(exec::GraphExecutorV2* exec,
               int num_inputs,
               NDArrayHandle *inputs,
               int *num_outputs,
+              mx_uint *out_req_type,
               NDArrayHandle **outputs,
               const exec::GraphExecutorV2::RunOption& opt) {
   using nnvm::GraphPtr;
@@ -57,6 +58,7 @@ void RunGraph(exec::GraphExecutorV2* exec,
   const int num_all_outputs = gptr->outputs.size();
 
   std::vector<NDArray> arguments, results;
+  std::vector<OpReqType> result_reqs;
   // Feed argument arrays.
   NDArray** args_ptr = reinterpret_cast<NDArray**>(inputs);
   for (int i = 0; i < num_inputs; ++i) {
@@ -73,7 +75,16 @@ void RunGraph(exec::GraphExecutorV2* exec,
   } else {
     *num_outputs = num_visible_outputs;
   }
-  exec->Run(arguments, &results, opt);
+  if (out_req_type != nullptr) {
+    for (int i = 0; i < num_visible_outputs; ++i) {
+      result_reqs.push_back(static_cast<OpReqType>(out_req_type[i]));
+    }
+  } else {
+    for (int i = 0; i < num_visible_outputs; ++i) {
+      result_reqs.push_back(OpReqType::kWriteTo);
+    }
+  }
+  exec->Run(arguments, result_reqs, &results, opt);
 
   if (Imperative::Get()->is_recording()) {
     // TODO(minjie): output arrays are not supported in recording mode.
@@ -356,6 +367,7 @@ int MXGraphEval(GraphHandle ghdl,
                 int num_inputs,
                 NDArrayHandle *inputs,
                 int *num_outputs,
+                mx_uint *out_req_type,
                 NDArrayHandle **outputs,
                 int is_training) {
   using nnvm::GraphPtr;
@@ -378,7 +390,8 @@ int MXGraphEval(GraphHandle ghdl,
   } else {
     opt.is_train = (is_training == 1);
   }
-  RunGraph(&exec, num_inputs, inputs, num_outputs, outputs, opt);
+  RunGraph(&exec, num_inputs, inputs, num_outputs,
+           out_req_type, outputs, opt);
   API_END();
 }
 
@@ -411,6 +424,7 @@ int MXExecV2Run(GraphExecutorV2Handle ehdl,
                 int num_inputs,
                 NDArrayHandle *inputs,
                 int *num_outputs,
+                mx_uint *out_req_type,
                 NDArrayHandle **outputs,
                 int is_training) {
   using nnvm::any;
@@ -424,6 +438,7 @@ int MXExecV2Run(GraphExecutorV2Handle ehdl,
   } else {
     opt.is_train = (is_training == 1);
   }
-  RunGraph(exec, num_inputs, inputs, num_outputs, outputs, opt);
+  RunGraph(exec, num_inputs, inputs, num_outputs,
+           out_req_type, outputs, opt);
   API_END();
 }

@@ -342,6 +342,7 @@ void GraphExecutorV2::AttachOps() {
 }
 
 void GraphExecutorV2::Run(const vector<NDArray>& arguments,
+                          const std::vector<OpReqType>& result_req,
                           vector<NDArray>* results,
                           const RunOption& option) {
   // TODO(minjie): currently use new operators for each run.
@@ -611,5 +612,6 @@ void GraphExecutorV2::SetupDataEntries() {
     data_entries_.push_back(NDArray(shape, context.at(st.device_id), delay_alloc));
   }
 }
+
 }  // namespace exec
 }  // namespace mxnet

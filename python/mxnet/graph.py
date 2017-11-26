@@ -164,12 +164,14 @@ class Graph(object):
 
     def eval(self, inputs, is_training=False):
         output_handles = ctypes.POINTER(NDArrayHandle)()
+        output_reqs = c_array(mx_uint, [])
         num_outputs = ctypes.c_int(0)
         check_call(_LIB.MXGraphEval(
             self._handle,
             ctypes.c_int(len(inputs)),
             c_array(NDArrayHandle, [arr.handle for arr in inputs]),
             ctypes.byref(num_outputs),
+            output_reqs,
             ctypes.byref(output_handles),
             ctypes.c_int(int(is_training))))
         if num_outputs.value == 1:
@@ -190,12 +192,14 @@ class GraphExecutor(object):
 
     def run(self, inputs, is_training=False):
         output_handles = ctypes.POINTER(NDArrayHandle)()
+        output_reqs = c_array(mx_uint, [])
         num_outputs = ctypes.c_int(0)
         check_call(_LIB.MXExecV2Run(
             self._handle,
             ctypes.c_int(len(inputs)),
             c_array(NDArrayHandle, [arr.handle for arr in inputs]),
             ctypes.byref(num_outputs),
+            output_reqs,
             ctypes.byref(output_handles),
             ctypes.c_int(int(is_training))))
         if num_outputs.value == 1:

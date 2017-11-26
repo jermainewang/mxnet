@@ -2037,6 +2037,7 @@ MXNET_DLL int MXGraphEval(GraphHandle ghdl,
                           int num_inputs,
                           NDArrayHandle *inputs,
                           int *num_outputs,
+                          mx_uint *out_req_type,
                           NDArrayHandle **outputs,
                           int is_training);
 MXNET_DLL int MXSymbolCreateGraphSymbol(GraphHandle graph,
@@ -2052,6 +2053,7 @@ MXNET_DLL int MXExecV2Run(GraphExecutorV2Handle ehdl,
                           int num_inputs,
                           NDArrayHandle *inputs,
                           int *num_outputs,
+                          mx_uint *out_req_type,
                           NDArrayHandle **outputs,
                           int is_training);
 /////////////// Subgraph APIs

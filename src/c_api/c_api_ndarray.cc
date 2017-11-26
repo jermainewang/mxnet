@@ -432,25 +432,25 @@ int MXAutogradBackwardEx(mx_uint num_output,
     *grad_stypes = dmlc::BeginPtr(ret->out_types);
   }
 #else
-  nnvm::Graph bwd_graph = ag::AutogradTape::Get().GetSpecializedBackwardGraph(
+  ag::AutogradTape::Get().GetSpecializedBackwardGraph(
       outputs, variables, ograds);
   // Evaluate the backward graph.
   // 0. Specialize for context.
   // 1. Make the correct input and output args.
-
-  LOG(FATAL) << "Not Implemented.";
+  
+  //LOG(FATAL) << "Not Implemented.";
 
   if (num_variables != 0) {
-    ret->ret_handles.clear();
-    ret->out_types.clear();
+    //ret->ret_handles.clear();
+    //ret->out_types.clear();
     //ret->ret_handles.reserve(grads.size());
     //ret->out_types.reserve(grads.size());
     //for (const auto& i : grads) {
       //ret->ret_handles.push_back(i);
       //ret->out_types.push_back(i->storage_type());
     //}
-    *grad_handles = dmlc::BeginPtr(ret->ret_handles);
-    *grad_stypes = dmlc::BeginPtr(ret->out_types);
+    //*grad_handles = dmlc::BeginPtr(ret->ret_handles);
+    //*grad_stypes = dmlc::BeginPtr(ret->out_types);
   }
 #endif
   API_END();

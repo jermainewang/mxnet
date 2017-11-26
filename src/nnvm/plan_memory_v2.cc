@@ -667,7 +667,7 @@ Graph MXPlanMemory(Graph&& graph) {
     }
   }
 
-  {
+  /*{
   ostringstream oss;
   oss << "[" << endl;
   for (size_t i = 0; i < min_storages.size(); ++i) {
@@ -676,7 +676,7 @@ Graph MXPlanMemory(Graph&& graph) {
   }
   oss << "]";
   LOG(INFO) << oss.str();
-  }
+  }*/
 
   graph.entry_attrs.SetColumn(plan_memory::ref_key, min_storage_ref);
   graph.global_attrs[plan_memory::storage_key] =

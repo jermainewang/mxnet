@@ -25,7 +25,7 @@ class AutogradTape {
 
   // ys cannot be empty. If xs is empty, the returned graph will compute
   // gradients for all grad-attached entries.
-  nnvm::Graph GetSpecializedBackwardGraph(
+  nnvm::GraphPtr GetSpecializedBackwardGraph(
       const std::vector<const NDArray*>& ys,
       const std::vector<const NDArray*>& xs,
       const std::vector<const NDArray*>& ys_grad);

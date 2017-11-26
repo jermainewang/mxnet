@@ -3,6 +3,7 @@
 
 #include "./autograd.h"
 #include "../nnvm/mx_passes.h"
+#include "../nnvm/graph_executor_v2.h"
 
 using namespace std;
 using namespace nnvm;
@@ -179,7 +180,7 @@ Graph AutogradTape::SpecializeForwardGraph(
 }
 
 
-Graph AutogradTape::GetSpecializedBackwardGraph(
+GraphPtr AutogradTape::GetSpecializedBackwardGraph(
     const vector<const NDArray*>& ys,
     const vector<const NDArray*>& xs,
     const vector<const NDArray*>& ys_grad) {
@@ -193,12 +194,12 @@ Graph AutogradTape::GetSpecializedBackwardGraph(
   GraphPtr bwd_graph = fwd_graph.GetGlobalAttr<GraphPtr>("gradient_graph");
   const auto& fwd_graph_idx = fwd_graph.indexed_graph();
   const auto& bwd_graph_idx = bwd_graph->indexed_graph();
-  LOG(INFO) << "#Fwd nodes: " << fwd_graph_idx.num_nodes();
-  LOG(INFO) << "#Bwd nodes: " << bwd_graph_idx.num_nodes();
-  LOG(INFO) << "#Fwd outputs: " << fwd_graph.outputs.size();
-  LOG(INFO) << "#Bwd outputs: " << bwd_graph->outputs.size();
-  LOG(INFO) << "#Bwd inputs: " << bwd_graph_idx.input_nodes().size();
-  LOG(INFO) << "#Fwd visible outputs: " << fwd_graph.GetGlobalAttr<size_t>("num_visible_outputs");
+  //LOG(INFO) << "#Fwd nodes: " << fwd_graph_idx.num_nodes();
+  //LOG(INFO) << "#Bwd nodes: " << bwd_graph_idx.num_nodes();
+  //LOG(INFO) << "#Fwd outputs: " << fwd_graph.outputs.size();
+  //LOG(INFO) << "#Bwd outputs: " << bwd_graph->outputs.size();
+  //LOG(INFO) << "#Bwd inputs: " << bwd_graph_idx.input_nodes().size();
+  //LOG(INFO) << "#Fwd visible outputs: " << fwd_graph.GetGlobalAttr<size_t>("num_visible_outputs");
   /*for (uint32_t nid = 0; nid < bwd_graph_idx.num_nodes(); ++nid) {
     const auto* node = bwd_graph_idx[nid].source;
     LOG(INFO) << "#" << nid << " " << node->attrs.name << " " << (node->is_variable()? "var" : node->op()->name);
@@ -305,7 +306,12 @@ Graph AutogradTape::GetSpecializedBackwardGraph(
     results.emplace_back(grad_buffers->value[eid]);
     result_reqs.emplace_back(req_type->value[eid]);
   }
-  return *bwd_graph;
+  // Execute.
+  exec::GraphExecutorV2 exec(bwd_graph);
+  exec::GraphExecutorV2::RunOption opt;
+  opt.is_train = true;
+  exec.Run(arguments, result_reqs, &results, opt);
+  return bwd_graph;
 }
 
 AutogradTape& AutogradTape::Get() {
