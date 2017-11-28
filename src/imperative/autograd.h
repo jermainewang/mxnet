@@ -1,6 +1,7 @@
 #ifndef MXNET_IMPERATIVE_AUTOGRAD_H_
 #define MXNET_IMPERATIVE_AUTOGRAD_H_
 
+#include <mxnet/op_attr_types.h>
 #include "./taping.h"
 
 namespace mxnet {

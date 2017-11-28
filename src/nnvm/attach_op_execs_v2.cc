@@ -235,7 +235,6 @@ void AttachOpExecsRec(const Graph& g,
       // (1) all executors in the subgraphs are stateless; (2) all the given arguments
       // are the same. However, be aware of the cost of this check.
       auto subgraph = node->graph();
-      auto subref = subgraph->CreateNodeColumn<shared_ptr<OpExecutorV2>>();
       const Column<shared_ptr<OpExecutorV2>>* sub_fwd_execs = nullptr;
       if (subgraph->global_attrs.count("gradient_node_mapping")) {
         if (fwd_execs != nullptr) {
@@ -262,8 +261,7 @@ void AttachOpExecsRec(const Graph& g,
                        vdevice->children[nid].get(),
                        mutate_index->children[nid].get(),
                        sub_fwd_execs,
-                       subref.CopyOnWrite());
-      execs->children[nid] = subref;
+                       execs->children[nid].CopyOnWrite());
     } else {
       const vector<uint32_t>& midx = mutate_index->value[nid];
       FCompute fcompute = FComputeExecutorV2::GetFCompute(
@@ -282,6 +280,9 @@ void AttachOpExecsRec(const Graph& g,
         state.get_state<op::OperatorState>().GiveTo(opr);
         const auto* opprop = mxnet::op::OpPropGetOpProperty(node->attrs);
         execs->value[nid] = std::make_shared<ForwardOpExecutorV2>(opr, opprop, midx);
+      } else if (fcompute != nullptr) {
+        execs->value[nid] = std::make_shared<FComputeExecutorV2>(
+            fcompute, node->attrs, node->inputs.size(), node->num_outputs());
       } else if (is_layer_backward.get(node->op(), false)) {
         CHECK_GE(node->control_deps.size(), 1);
         const uint32_t fwd_nid = idx.node_id(node->control_deps[0].get());
@@ -292,9 +293,6 @@ void AttachOpExecsRec(const Graph& g,
         execs->value[nid] = std::make_shared<BackwardOpExecutorV2>(
             dynamic_cast<ForwardOpExecutorV2*>(fwd_opexec.get())->op(),
             opprop, midx);
-      } else if (fcompute != nullptr) {
-        execs->value[nid] = std::make_shared<FComputeExecutorV2>(
-            fcompute, node->attrs, node->inputs.size(), node->num_outputs());
       } else {
         LOG(INFO) << "FCompute not registered for operator " << node->op()->name;
       }

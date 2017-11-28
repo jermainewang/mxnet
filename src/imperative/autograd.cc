@@ -153,7 +153,6 @@ Graph AutogradTape::SpecializeForwardGraph(
   graph = nnvm::Transform(graph, {"MXGradient"}, kwargs_any);
   const auto& graph_idx = graph.indexed_graph();
   // Create column attributes for the forward graph.
-  auto values_col = graph.CreateEntryColumn<NDArray>();
   auto* shapes = graph.CreateOrWriteEntryColumn<TShape>(pass::shape::key);
   auto* dtypes = graph.CreateOrWriteEntryColumn<int>(pass::dtype::key, -1);
   auto* values = graph.CreateOrWriteEntryColumn<NDArray>("value");

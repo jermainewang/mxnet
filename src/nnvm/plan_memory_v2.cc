@@ -336,7 +336,18 @@ void InplaceOptimize(const Graph& graph,
         entry_ref_counts[eid_out] > 0 &&
         shape->value[eid_out].Size() == shape->value[eid_in].Size() &&
         dtype->value[eid_out] == dtype->value[eid_in]) {
-      // inplace optimization
+      // Inplace optimization only happens when:
+      // 1. The to-be-shared input entry has not been taken by another output entry.
+      // 2. The output entry has not been allocated.
+      // 3. The to-be-shared input entry has been allocated (not external storage).
+      // 4. The reference count of the to-be-shared memory space is one
+      //    (not used by other entries).
+      //    Or if the sharing is identity (output entry will not change the
+      //    contents of the input entry), this is also ok.
+      // 5. The reference count of the output entry is non-zero (the entry
+      //    will be used by others; otherwise, no need to allocate any
+      //    memory for it).
+      // 6. The to-be-shared input entry has the same shape/dtype etc.
       taken[kv.first] = true;
       storage->value[eid_out].storage_id = sid_in;
       storage->value[eid_out].inplace_index = kv.first;
@@ -529,7 +540,8 @@ size_t PlanMemoryRec(const Graph& graph,
   size_t num_not_allocated = 0;
   for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
     const Node* node = idx[nid].source;
-    //LOG(INFO) << "Planning node#" << nid << node->attrs.name;
+    //LOG(INFO) << "Planning memory for N#" << nid << " " << node->attrs.name
+      //<< " " << node->is_graph();
     if (node->is_variable()) {
       // Do nothing for variable inputs. Variable inputs are usually from external
       // storage. If this is a subgraph, the storage has already been specified
@@ -549,9 +561,7 @@ size_t PlanMemoryRec(const Graph& graph,
       const auto& subidx = sg->indexed_graph();
       vector<uint32_t> sub_in_refcounts(subidx.input_nodes().size(), 0);
       vector<uint32_t> sub_out_refcounts(subidx.outputs().size(), 0);
-      ColumnRef<StorageRef> subplan_ref
-        = sg->CreateEntryColumn<StorageRef>({plan_memory::kNull, -1});
-      Column<StorageRef>* subplan = subplan_ref.CopyOnWrite();
+      Column<StorageRef>* subplan = storage->children[nid].CopyOnWrite();
       for (size_t i = 0; i < node->inputs.size(); ++i) {
         const uint32_t ineid = idx.entry_id(node->inputs[i]);
         const uint32_t subineid = subidx.entry_id(subidx.input_nodes()[i], 0);
@@ -575,7 +585,6 @@ size_t PlanMemoryRec(const Graph& graph,
           (device == nullptr)? nullptr : device->children[nid].get(),
           subplan,
           allocator);
-      storage->children[nid] = subplan_ref;
       // Copy the plan for the output entries.
       for (size_t i = 0; i < node->num_outputs(); ++i) {
         const uint32_t outeid = idx.entry_id(nid, i);
@@ -634,8 +643,8 @@ Graph MXPlanMemory(Graph&& graph) {
   const auto& idx = graph.indexed_graph();
 
   // Create initial memory plan.
-  ColumnRef<StorageRef> init_plan =
-    graph.CreateEntryColumn<StorageRef>({plan_memory::kNull, -1});
+  ColumnRef<StorageRef> init_plan = CreateEntryColumn<StorageRef>(
+      graph, plan_memory::ref_key, {plan_memory::kNull, -1});
   for (uint32_t eid : args.external_entry_ids) {
     init_plan.CopyOnWrite()->value[eid].storage_id = plan_memory::kExternalStorageID;
   }

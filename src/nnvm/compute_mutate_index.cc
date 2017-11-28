@@ -24,9 +24,7 @@ void ComputeMutateIndexRec(
     if (node->is_graph()) {
       auto subgraph = node->graph();
       if (subgraph->node_attrs.count(mutate::key) == 0) {
-        auto subref = subgraph->CreateNodeColumn<vector<uint32_t>>();
-        ComputeMutateIndexRec(*subgraph, subref.CopyOnWrite());
-        mutate_index->children[nid] = subref;
+        ComputeMutateIndexRec(*subgraph, mutate_index->children[nid].CopyOnWrite());
       } else {
         mutate_index->children[nid] =
           subgraph->node_attrs.GetColumn<vector<uint32_t>>(mutate::key);
@@ -55,9 +53,8 @@ void ComputeMutateIndexRec(
 
 Graph MXComputeMutateIndex(Graph &&graph) {
   if (graph.node_attrs.count(mutate::key) == 0) {
-    auto ref = graph.CreateNodeColumn<vector<uint32_t>>();
-    ComputeMutateIndexRec(graph, ref.CopyOnWrite());
-    graph.node_attrs.SetColumn(mutate::key, ref);
+    ComputeMutateIndexRec(
+        graph, graph.CreateOrWriteNodeColumn<vector<uint32_t>>(mutate::key));
   }
   return graph;
 }

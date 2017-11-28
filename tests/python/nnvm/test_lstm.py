@@ -97,7 +97,7 @@ def test_lstm():
         #loss = lstm(data)
         with autograd.record():
             loss = lstm(data)
-            #loss.backward()
+            loss.backward()
         loss.wait_to_read()
         print('Iter #%d, takes %fs' % (i, (time.time() - t0)))
 

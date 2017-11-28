@@ -182,7 +182,6 @@ class InferAttrPass {
       } 
       return true;
     }
-    attr->children[nid] = sg->CreateEntryColumn(empty_val_);
     return false;
   }
 
@@ -288,7 +287,6 @@ class InferAttrPass {
       //  AND is a backward op
       //  AND has control dependency
       //  AND first control dependency points to a forward op.
-      LOG(INFO) << node->attrs.name << " <-c- " << node->control_deps[0]->attrs.name;
       InferLegacyBackwardNode(graph, nid, attr);
     } else {
       InferNormalOpNode(graph, nid, attr);

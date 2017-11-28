@@ -218,13 +218,11 @@ void AttachOpClosuresRec(const Graph& graph,
       // To reuse them, one must make sure the OpExecutorV2 can be reused.
       // See attach_op_exec_pass_v2.cc
       auto subgraph = node->graph();
-      auto subref = subgraph->CreateNodeColumn<Closure>();
       AttachOpClosuresRec(*subgraph,
                           op_execs->children[nid].get(),
                           vdevice->children[nid].get(),
                           mem_plan->children[nid].get(),
-                          subref.CopyOnWrite());
-      closures->children[nid] = subref;
+                          closures->children[nid].CopyOnWrite());
     } else {
       cl.in_array.resize(node->inputs.size());
       cl.out_array.resize(node->num_outputs());
@@ -319,7 +317,7 @@ void GraphExecutorV2::CheckAllowBulkExec() const {
 
 void GraphExecutorV2::AttachOps() {
   using namespace pass;
-  op_execs_ = graph_ptr_->CreateNodeColumn<shared_ptr<OpExecutorV2>>();
+  op_execs_ = CreateNodeColumn<shared_ptr<OpExecutorV2>>(*graph_ptr_);
   const auto* shapes = graph_ptr_->entry_attrs.GetColumn<TShape>(shape::key).get();
   const auto* dtypes = graph_ptr_->entry_attrs.GetColumn<int>(dtype::key).get();
   const auto* mem_plan = graph_ptr_->entry_attrs.GetColumn<StorageRef>(plan_memory::ref_key).get();
@@ -333,7 +331,7 @@ void GraphExecutorV2::AttachOps() {
                    mutate,
                    fwd_execs_.get(),
                    op_execs_.CopyOnWrite());
-  closures_ = graph_ptr_->CreateNodeColumn<Closure>();
+  closures_ = CreateNodeColumn<Closure>(*graph_ptr_);
   AttachOpClosuresRec(*graph_ptr_,
                       op_execs_.get(),
                       vdevice,

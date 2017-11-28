@@ -24,9 +24,7 @@ void ComputeIgnoredInputsRec(
     if (node->is_graph()) {
       auto subgraph = node->graph();
       if (subgraph->node_attrs.count(ignore::key) == 0) {
-        auto subref = subgraph->CreateNodeColumn<vector<uint32_t>>();
-        ComputeIgnoredInputsRec(*subgraph, subref.CopyOnWrite());
-        ignored_inputs->children[nid] = subref;
+        ComputeIgnoredInputsRec(*subgraph, ignored_inputs->children[nid].CopyOnWrite());
       } else {
         ignored_inputs->children[nid] =
           subgraph->node_attrs.GetColumn<vector<uint32_t>>(ignore::key);
@@ -59,9 +57,8 @@ void ComputeIgnoredInputsRec(
 
 Graph MXComputeIgnoredInputs(Graph &&graph) {
   if (graph.node_attrs.count(ignore::key) == 0) {
-    auto ref = graph.CreateNodeColumn<vector<uint32_t>>();
-    ComputeIgnoredInputsRec(graph, ref.CopyOnWrite());
-    graph.node_attrs.SetColumn(ignore::key, ref);
+    ComputeIgnoredInputsRec(graph,
+        graph.CreateOrWriteNodeColumn<vector<uint32_t>>(ignore::key));
   }
   return graph;
 }

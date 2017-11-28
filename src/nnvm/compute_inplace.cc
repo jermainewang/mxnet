@@ -46,11 +46,9 @@ void ComputeInplaceOptionRec(
     if (node->is_graph()) {
       auto subgraph = node->graph();
       if (subgraph->node_attrs.count(inplace::key) == 0) {
-        auto subref = subgraph->CreateNodeColumn<vector<InplaceOption>>();
         ComputeInplaceOptionRec(*subgraph,
                                 shapes->children[nid].get(),
-                                subref.CopyOnWrite());
-        options->children[nid] = subref;
+                                options->children[nid].CopyOnWrite());
       } else {
         options->children[nid] =
           subgraph->node_attrs.GetColumn<vector<InplaceOption>>(inplace::key);
@@ -78,10 +76,9 @@ Graph MXComputeInplaceOption(Graph &&graph) {
   using inplace::InplaceOption;
   using inplace::key;
   if (graph.node_attrs.count(key) == 0) {
-    auto ref = graph.CreateNodeColumn<vector<InplaceOption>>();
     const auto* shapes = graph.entry_attrs.GetColumn<TShape>("shape").get();
-    ComputeInplaceOptionRec(graph, shapes, ref.CopyOnWrite());
-    graph.node_attrs.SetColumn(key, ref);
+    ComputeInplaceOptionRec(graph, shapes,
+        graph.CreateOrWriteNodeColumn<vector<InplaceOption>>(key));
   }
   return graph;
 }

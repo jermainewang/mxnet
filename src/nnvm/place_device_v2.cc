@@ -13,9 +13,7 @@ void PlaceDeviceDefaultRec(const Graph& graph,
     const Node* node = idx[nid].source;
     if (node->is_graph()) {
       auto subgraph = node->graph();
-      ColumnRef<int> subdev = subgraph->CreateNodeColumn<int>(0);
-      PlaceDeviceDefaultRec(*subgraph, subdev.CopyOnWrite());
-      device->children[nid] = subdev;
+      PlaceDeviceDefaultRec(*subgraph, device->children[nid].CopyOnWrite());
     } else {
       // Do nothing.
     }
@@ -23,9 +21,8 @@ void PlaceDeviceDefaultRec(const Graph& graph,
 }
 
 Graph MXPlaceDefaultDevice(Graph&& graph) {
-  ColumnRef<int> devref = graph.CreateNodeColumn<int>(0);
-  PlaceDeviceDefaultRec(graph, devref.CopyOnWrite());
-  graph.node_attrs.SetColumn(ctx::device_key, devref);
+  PlaceDeviceDefaultRec(graph,
+      graph.CreateOrWriteNodeColumn<int>(ctx::device_key, 0));
   const auto& ctx = GetPassArgument<vector<Context>>(graph, ctx::ctx_key);
   graph.global_attrs[ctx::ctx_key] = std::make_shared<any>(ctx);
   return graph;
