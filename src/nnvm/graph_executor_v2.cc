@@ -200,7 +200,6 @@ inline Engine::OprHandle CreateCachedOpr(
 }
 
 void AttachOpClosuresRec(const Graph& graph,
-                         const Column<shared_ptr<OpExecutorV2>>* op_execs,
                          const Column<int>* vdevice,
                          const Column<StorageRef>* mem_plan,
                          Column<Closure>* closures) {
@@ -219,7 +218,6 @@ void AttachOpClosuresRec(const Graph& graph,
       // See attach_op_exec_pass_v2.cc
       auto subgraph = node->graph();
       AttachOpClosuresRec(*subgraph,
-                          op_execs->children[nid].get(),
                           vdevice->children[nid].get(),
                           mem_plan->children[nid].get(),
                           closures->children[nid].CopyOnWrite());
@@ -278,12 +276,11 @@ void ResetClosure(const Node* node, Closure* cl) {
 }  // namespace
 
 GraphExecutorV2::GraphExecutorV2(nnvm::GraphPtr graph,
-                                 const GraphExecutorV2::ExecState& fwd_state,
+                                 const GraphExecutorV2::ExecState& fwd_states,
                                  const GraphExecutorV2::Config& config)
-  : graph_ptr_(graph), config_(config), fwd_execs_(fwd_state),
+  : graph_ptr_(graph), config_(config), fwd_states_(fwd_states),
     required_graph_ptr_attrs_(_InitRequiredGraphAttrs()) {
   _CheckAllAttrsExist(*graph_ptr_, required_graph_ptr_attrs_);
-  //AttachOps();
   SetupResources();
   //if (config_.bulk_execution) {
     //CheckAllowBulkExec();
@@ -317,23 +314,27 @@ void GraphExecutorV2::CheckAllowBulkExec() const {
 
 void GraphExecutorV2::AttachOps() {
   using namespace pass;
-  op_execs_ = CreateNodeColumn<shared_ptr<OpExecutorV2>>(*graph_ptr_);
   const auto* shapes = graph_ptr_->entry_attrs.GetColumn<TShape>(shape::key).get();
   const auto* dtypes = graph_ptr_->entry_attrs.GetColumn<int>(dtype::key).get();
   const auto* mem_plan = graph_ptr_->entry_attrs.GetColumn<StorageRef>(plan_memory::ref_key).get();
   const auto* vdevice = graph_ptr_->node_attrs.GetColumn<int>(ctx::device_key).get();
   const auto* mutate = graph_ptr_->node_attrs.GetColumn<vector<uint32_t>>(mutate::key).get();
+  states_ = CreateNodeColumn<FunctorInfo>(*graph_ptr_);
+  AttachFunctorInfoRec(*graph_ptr_,
+                       shapes,
+                       dtypes,
+                       vdevice,
+                       fwd_states_.get(),
+                       states_.CopyOnWrite());
+  op_execs_ = CreateNodeColumn<shared_ptr<OpExecutorV2>>(*graph_ptr_);
   AttachOpExecsRec(*graph_ptr_,
-                   shapes,
-                   dtypes,
                    mem_plan,
                    vdevice,
                    mutate,
-                   fwd_execs_.get(),
+                   fwd_states_.get(),
                    op_execs_.CopyOnWrite());
   closures_ = CreateNodeColumn<Closure>(*graph_ptr_);
   AttachOpClosuresRec(*graph_ptr_,
-                      op_execs_.get(),
                       vdevice,
                       mem_plan,
                       closures_.CopyOnWrite());
@@ -483,7 +484,7 @@ void GraphExecutorV2::RunOpsInBulk() {
   const Config& cfg = config_;
   // Note: use move to clear the reference of the closures and op_execs.
   ColumnRef<Closure> closures = std::move(closures_);
-  ExecState op_execs = std::move(op_execs_);
+  auto op_execs = std::move(op_execs_);
   auto fn = [graph, op_execs, closures, cfg, is_gpu, is_train] 
     (RunContext ctx, Engine::CallbackOnComplete on_complete) mutable {
     const auto& idx = graph->indexed_graph();

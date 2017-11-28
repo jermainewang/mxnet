@@ -22,8 +22,9 @@ namespace exec {
 // forward executor
 class ForwardOpExecutorV2 : public OpExecutorV2 {
  public:
-  void Run(const OpContext& op_ctx) override {
-    op_->Forward(op_ctx, in_data_, req, out_data_, aux_data_);
+  void Run(const OpContext& op_ctx) const override {
+    auto* opr = state_.get_state<op::OperatorState>().opr();
+    opr->Forward(op_ctx, in_data_, req, out_data_, aux_data_);
 #if MKL_EXPERIMENTAL == 1
     mkl_tblobs_prv_to_cpu(in_data_);
     mkl_tblobs_prv_to_cpu(out_data_);
@@ -31,15 +32,16 @@ class ForwardOpExecutorV2 : public OpExecutorV2 {
 #endif
   }
   ExecType exec_type() const override {
-    return op_->exec_type();
+    auto* opr = state_.get_state<op::OperatorState>().opr();
+    return opr->exec_type();
   }
-  shared_ptr<Operator> op() const {
-    return op_;
+  OpStatePtr state() const {
+    return state_;
   }
-  explicit ForwardOpExecutorV2(shared_ptr<Operator> op,
-                             const OperatorProperty* prop,
-                             vector<uint32_t> aux_index)
-      : op_(op) {
+  explicit ForwardOpExecutorV2(OpStatePtr state,
+                               const OperatorProperty* prop,
+                               vector<uint32_t> aux_index)
+      : state_(state) {
     const size_t num_inputs = prop->ListArguments().size() + aux_index.size();
     const size_t num_outputs = prop->NumOutputs();
     this->Reset(num_inputs, num_outputs);
@@ -65,15 +67,16 @@ class ForwardOpExecutorV2 : public OpExecutorV2 {
   }
 
  private:
-  shared_ptr<Operator> op_;
+  OpStatePtr state_;
   vector<TBlob> in_data_, out_data_, aux_data_;
 };
 
 // backward executor
 class BackwardOpExecutorV2 : public OpExecutorV2 {
  public:
-  void Run(const OpContext& op_ctx) override {
-    op_->Backward(op_ctx, out_grad_, in_data_, out_data_,
+  void Run(const OpContext& op_ctx) const override {
+    auto* opr = state_.get_state<op::OperatorState>().opr();
+    opr->Backward(op_ctx, out_grad_, in_data_, out_data_,
                   req, in_grad_, aux_data_);
 #if MKL_EXPERIMENTAL == 1
     mkl_tblobs_prv_to_cpu(out_grad_);
@@ -84,12 +87,13 @@ class BackwardOpExecutorV2 : public OpExecutorV2 {
 #endif
   }
   ExecType exec_type() const override {
-    return op_->exec_type();
+    auto* opr = state_.get_state<op::OperatorState>().opr();
+    return opr->exec_type();
   }
-  explicit BackwardOpExecutorV2(shared_ptr<Operator> op,
-                              const OperatorProperty* prop,
-                              vector<uint32_t> aux_index)
-      : op_(op) {
+  explicit BackwardOpExecutorV2(OpStatePtr state,
+                                const OperatorProperty* prop,
+                                vector<uint32_t> aux_index)
+      : state_(state) {
     out_grad_.resize(prop->NumVisibleOutputs());
     in_data_.resize(prop->ListArguments().size());
     in_grad_.resize(in_data_.size());
@@ -132,7 +136,7 @@ class BackwardOpExecutorV2 : public OpExecutorV2 {
   }
 
  private:
-  shared_ptr<Operator> op_;
+  OpStatePtr state_;
   vector<TBlob> out_grad_, in_data_, out_data_, aux_data_;
   vector<TBlob> in_grad_;
 };
@@ -140,7 +144,7 @@ class BackwardOpExecutorV2 : public OpExecutorV2 {
 // fcompute executor executor
 class FComputeExecutorV2 : public OpExecutorV2 {
  public:
-  void Run(const OpContext& op_ctx) override {
+  void Run(const OpContext& op_ctx) const override {
     fcompute_(attrs_, op_ctx, in_data_, req, out_data_);
 #if MKL_EXPERIMENTAL == 1
     mkl_tblobs_prv_to_cpu(in_data_);
@@ -150,10 +154,13 @@ class FComputeExecutorV2 : public OpExecutorV2 {
   ExecType exec_type() const override {
     return ExecType::kSync;
   }
+  OpStatePtr state() const {
+    return OpStatePtr();
+  }
   explicit FComputeExecutorV2(FCompute fcompute,
-                            const NodeAttrs& attrs,
-                            size_t num_inputs,
-                            size_t num_outputs)
+                              const NodeAttrs& attrs,
+                              size_t num_inputs,
+                              size_t num_outputs)
       : fcompute_(fcompute), attrs_(attrs) {
     in_data_.resize(num_inputs);
     out_data_.resize(num_outputs);
@@ -187,22 +194,19 @@ class FComputeExecutorV2 : public OpExecutorV2 {
   vector<TBlob> in_data_, out_data_;
 };
 
-void AttachOpExecsRec(const Graph& g,
-                      const Column<TShape>* vshape,
-                      const Column<int>* vdtype,
-                      const Column<pass::plan_memory::StorageRef>* mem_plan,
-                      const Column<int>* vdevice,
-                      const Column<vector<uint32_t>>* mutate_index,
-                      const Column<shared_ptr<OpExecutorV2>>* fwd_execs,
-                      Column<shared_ptr<OpExecutorV2>>* execs) {
-  using pass::plan_memory::StorageRef;
-  using pass::plan_memory::kNull;
+void AttachFunctorInfoRec(
+    const Graph& g,
+    const Column<TShape>* vshape,
+    const Column<int>* vdtype,
+    const Column<int>* vdevice,
+    const Column<FunctorInfo>* fwd_infos,
+    Column<FunctorInfo>* infos) {
   static auto& fcreate_layer_op = nnvm::Op::GetAttr<FCreateOpState>("FCreateOpState");
   static auto& is_layer_backward = nnvm::Op::GetAttr<bool>("TIsLayerOpBackward");
   const auto& idx = g.indexed_graph();
   const auto& context = g.GetGlobalAttr<vector<Context>>(pass::ctx::ctx_key);
 
-  if (fwd_execs != nullptr) {
+  if (fwd_infos != nullptr) {
     // This is a standalone backward graph.
     CHECK(g.global_attrs.count("gradient_node_mapping"));
     const auto& gradient_node_mapping =
@@ -211,17 +215,94 @@ void AttachOpExecsRec(const Graph& g,
     for (uint32_t nid = 0; nid < gradient_node_mapping.size(); ++nid) {
       const Node* node = idx[nid].source;
       const uint32_t fwd_nid = gradient_node_mapping[nid];
-      if (fwd_nid < fwd_execs->value.size()) {
-        shared_ptr<OpExecutorV2> fwd_opexec =
-          CHECK_NOTNULL(fwd_execs->value[fwd_nid]);
-        execs->value[nid] = std::make_shared<BackwardOpExecutorV2>(
-            dynamic_cast<ForwardOpExecutorV2*>(fwd_opexec.get())->op(),
-            mxnet::op::OpPropGetOpProperty(node->attrs),
-            mutate_index->value[nid]);
+      if (fwd_nid < fwd_infos->value.size()) {
+        const auto& fwd_info = fwd_infos->value[fwd_nid];
+        CHECK(fwd_info.type == FunctorType::kForward);
+        infos->value[nid].type = FunctorType::kBackward;
+        infos->value[nid].state = fwd_info.state;
       }
     }
   }
   
+  for (size_t nid = 0; nid < idx.num_nodes(); ++nid) {
+    const Node* node = idx[nid].source;
+    if (infos->value[nid].type != FunctorType::kUndefined) {
+      continue;
+    }
+    if (node->is_variable()) {
+      continue;
+    }
+    if (node->is_graph()) {
+      // XXX(minjie): Always create new executors for subgraphs. This can be saved if
+      // (1) all executors in the subgraphs are stateless; (2) all the given arguments
+      // are the same. However, be aware of the cost of this check.
+      auto subgraph = node->graph();
+      const Column<FunctorInfo>* sub_fwd_infos = nullptr;
+      if (subgraph->global_attrs.count("gradient_node_mapping")) {
+        if (fwd_infos != nullptr) {
+          // Forward node is in another subgraph.
+          const auto& node_mapping =
+            subgraph->GetGlobalAttr<vector<uint32_t>>("gradient_node_mapping");
+          const uint32_t fwd_nid = node_mapping[nid];
+          CHECK_LT(fwd_nid, fwd_infos->children.size());
+          sub_fwd_infos = fwd_infos->children[fwd_nid].get();
+        } else {
+          // Foward node is connected by the first control dependency.
+          CHECK_GE(node->control_deps.size(), 1U)
+            << "Backward node need to have control_deps to its forward node";
+          const NodePtr& fwd_ptr = node->control_deps[0];
+          CHECK(fwd_ptr->is_graph());
+          const uint32_t fwd_nid = idx.node_id(fwd_ptr.get());
+          sub_fwd_infos = infos->children[fwd_nid].get();
+        }
+      }
+      AttachFunctorInfoRec(*subgraph,
+                       vshape->children[nid].get(),
+                       vdtype->children[nid].get(),
+                       vdevice->children[nid].get(),
+                       sub_fwd_infos,
+                       infos->children[nid].CopyOnWrite());
+    } else {
+      auto& info = infos->value[nid];
+      FCompute fcompute = FComputeExecutorV2::GetFCompute(
+          node->op(), context.at(vdevice->value[nid]));
+      if (fcompute != nullptr) {
+        info.type = FunctorType::kFCompute;
+      } else if (fcreate_layer_op.count(node->op())) {
+        vector<TShape> ishape;
+        vector<int> itype;
+        for (const auto& e : node->inputs) {
+          ishape.emplace_back(vshape->value[idx.entry_id(e)]);
+          itype.emplace_back(vdtype->value[idx.entry_id(e)]);
+        }
+        info.type = FunctorType::kForward;
+        info.state = fcreate_layer_op[node->op()](
+              node->attrs, context.at(vdevice->value[nid]), ishape, itype);
+      } else if (is_layer_backward.get(node->op(), false)) {
+        CHECK_GE(node->control_deps.size(), 1);
+        const uint32_t fwd_nid = idx.node_id(node->control_deps[0].get());
+        CHECK(vdevice->value[fwd_nid] == vdevice->value[nid]);
+        info.type = FunctorType::kBackward;
+        info.state = infos->value[fwd_nid].state;
+      } else {
+        // Do nothing.
+      }
+    }
+  }
+}
+
+void AttachOpExecsRec(
+    const Graph& g,
+    const Column<pass::plan_memory::StorageRef>* mem_plan,
+    const Column<int>* vdevice,
+    const Column<vector<uint32_t>>* mutate_index,
+    const Column<FunctorInfo>* infos,
+    Column<shared_ptr<OpExecutorV2>>* execs) {
+  using pass::plan_memory::StorageRef;
+  using pass::plan_memory::kNull;
+  const auto& idx = g.indexed_graph();
+  const auto& context = g.GetGlobalAttr<vector<Context>>(pass::ctx::ctx_key);
+
   for (size_t nid = 0; nid < idx.num_nodes(); ++nid) {
     const Node* node = idx[nid].source;
     if (execs->value[nid] != nullptr) {
@@ -234,67 +315,38 @@ void AttachOpExecsRec(const Graph& g,
       // XXX(minjie): Always create new executors for subgraphs. This can be saved if
       // (1) all executors in the subgraphs are stateless; (2) all the given arguments
       // are the same. However, be aware of the cost of this check.
-      auto subgraph = node->graph();
-      const Column<shared_ptr<OpExecutorV2>>* sub_fwd_execs = nullptr;
-      if (subgraph->global_attrs.count("gradient_node_mapping")) {
-        if (fwd_execs != nullptr) {
-          // Forward node is in another subgraph.
-          const auto& node_mapping =
-            subgraph->GetGlobalAttr<vector<uint32_t>>("gradient_node_mapping");
-          const uint32_t fwd_nid = node_mapping[nid];
-          CHECK_LT(fwd_nid, fwd_execs->children.size());
-          sub_fwd_execs = fwd_execs->children[fwd_nid].get();
-        } else {
-          // Foward node is connected by the first control dependency.
-          CHECK_GE(node->control_deps.size(), 1U)
-            << "Backward node need to have control_deps to its forward node";
-          const NodePtr& fwd_ptr = node->control_deps[0];
-          CHECK(fwd_ptr->is_graph());
-          const uint32_t fwd_nid = idx.node_id(fwd_ptr.get());
-          sub_fwd_execs = execs->children[fwd_nid].get();
-        }
-      }
-      AttachOpExecsRec(*subgraph,
-                       vshape->children[nid].get(),
-                       vdtype->children[nid].get(),
+      AttachOpExecsRec(*node->graph(),
                        mem_plan->children[nid].get(),
                        vdevice->children[nid].get(),
                        mutate_index->children[nid].get(),
-                       sub_fwd_execs,
+                       infos->children[nid].get(),
                        execs->children[nid].CopyOnWrite());
     } else {
-      const vector<uint32_t>& midx = mutate_index->value[nid];
-      FCompute fcompute = FComputeExecutorV2::GetFCompute(
-          node->op(), context.at(vdevice->value[nid]));
-      if (fcreate_layer_op.count(node->op())) {
-        vector<TShape> ishape;
-        vector<int> itype;
-        for (const auto& e : node->inputs) {
-          ishape.emplace_back(vshape->value[idx.entry_id(e)]);
-          itype.emplace_back(vdtype->value[idx.entry_id(e)]);
+      switch (infos->value[nid].type) {
+      case FunctorType::kFCompute:
+        {
+          FCompute fcompute = FComputeExecutorV2::GetFCompute(
+              node->op(), context.at(vdevice->value[nid]));
+          CHECK_NOTNULL(fcompute);
+          execs->value[nid] = std::make_shared<FComputeExecutorV2>(
+              fcompute, node->attrs, node->inputs.size(), node->num_outputs());
         }
-        // TODO(minjie): hack for new OperatorState change.
-        shared_ptr<Operator> opr;
-        auto state = fcreate_layer_op[node->op()](
-              node->attrs, context.at(vdevice->value[nid]), ishape, itype);
-        state.get_state<op::OperatorState>().GiveTo(opr);
-        const auto* opprop = mxnet::op::OpPropGetOpProperty(node->attrs);
-        execs->value[nid] = std::make_shared<ForwardOpExecutorV2>(opr, opprop, midx);
-      } else if (fcompute != nullptr) {
-        execs->value[nid] = std::make_shared<FComputeExecutorV2>(
-            fcompute, node->attrs, node->inputs.size(), node->num_outputs());
-      } else if (is_layer_backward.get(node->op(), false)) {
-        CHECK_GE(node->control_deps.size(), 1);
-        const uint32_t fwd_nid = idx.node_id(node->control_deps[0].get());
-        CHECK(vdevice->value[fwd_nid] == vdevice->value[nid]);
-        shared_ptr<OpExecutorV2> fwd_opexec =
-          CHECK_NOTNULL(execs->value[fwd_nid]);
-        const auto* opprop = mxnet::op::OpPropGetOpProperty(node->attrs);
-        execs->value[nid] = std::make_shared<BackwardOpExecutorV2>(
-            dynamic_cast<ForwardOpExecutorV2*>(fwd_opexec.get())->op(),
-            opprop, midx);
-      } else {
-        LOG(INFO) << "FCompute not registered for operator " << node->op()->name;
+      case FunctorType::kForward:
+        {
+          execs->value[nid] = std::make_shared<ForwardOpExecutorV2>(
+              infos->value[nid].state,
+              mxnet::op::OpPropGetOpProperty(node->attrs),
+              mutate_index->value[nid]);
+        }
+      case FunctorType::kBackward:
+        {
+          execs->value[nid] = std::make_shared<BackwardOpExecutorV2>(
+              infos->value[nid].state,
+              mxnet::op::OpPropGetOpProperty(node->attrs),
+              mutate_index->value[nid]);
+        }
+      case FunctorType::kUndefined:
+        LOG(INFO) << "No functor registered for operator \"" << node->op()->name << "\".";
       }
       // Setup output requests.
       OpExecutorV2* exec = execs->value[nid].get();

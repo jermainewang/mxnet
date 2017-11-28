@@ -203,6 +203,19 @@ struct MXPlanMemoryArgs {
 }  // namespace pass
 
 namespace exec {
+
+enum class FunctorType {
+  kUndefined = -1,
+  kFCompute,
+  kForward,
+  kBackward,
+};
+
+struct FunctorInfo {
+  OpStatePtr state;
+  FunctorType type;
+};
+
 /*!
  * \brief executor to execute an operator
  * This is a graph executor dependent interface
@@ -241,7 +254,7 @@ class OpExecutorV2 {
    *  This function call do not synchronize the stream.
    * \param op_ctx The context passed in by environment.
    */
-  virtual void Run(const OpContext& op_ctx) = 0;
+  virtual void Run(const OpContext& op_ctx) const = 0;
   /*! \return the execution type */
   virtual ExecType exec_type() const = 0;
  
@@ -257,14 +270,20 @@ class OpExecutorV2 {
   std::vector<TBlob*> in_tblob_ptr_, out_tblob_ptr_;
 };
 
-extern void AttachOpExecsRec(
+void AttachFunctorInfoRec(
     const nnvm::Graph& g,
     const nnvm::Column<TShape>* vshape,
     const nnvm::Column<int>* vdtype,
+    const nnvm::Column<int>* vdevice,
+    const nnvm::Column<FunctorInfo>* fwd_infos,
+    nnvm::Column<FunctorInfo>* infos);
+
+void AttachOpExecsRec(
+    const nnvm::Graph& g,
     const nnvm::Column<pass::plan_memory::StorageRef>* mem_plan,
     const nnvm::Column<int>* vdevice,
     const nnvm::Column<std::vector<uint32_t>>* mutate_index,
-    const nnvm::Column<std::shared_ptr<OpExecutorV2>>* fwd_states,
+    const nnvm::Column<FunctorInfo>* infos,
     nnvm::Column<std::shared_ptr<OpExecutorV2>>* execs);
 }  // namespace exec
 
@@ -298,17 +317,10 @@ class OperatorState {
         out_grad_ptr, in_data_ptr, out_data_ptr);
   }
 
-  // TODO(minjie): hack
   ~OperatorState() { 
-    if (opr_) {
-      delete opr_;
-    }
+    delete opr_;
   }
-  // TODO(minjie): hack
-  void GiveTo(std::shared_ptr<Operator>& ptr) {
-    ptr.reset(opr_);
-    opr_ = nullptr;
-  }
+  
   Operator* opr() {
     return opr_;
   }

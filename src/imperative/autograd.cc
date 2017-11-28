@@ -37,7 +37,7 @@ void AutogradTape::SaveInfo(const NDArray* nd, bool save_value) {
   }
 }
 
-void AutogradTape::Record(
+uint32_t AutogradTape::Record(
     const nnvm::NodeAttrs& attrs,
     const vector<NDArray*>& ndinputs,
     const vector<NDArray*>& ndoutputs) {
@@ -73,12 +73,42 @@ void AutogradTape::Record(
   for (size_t i = 0; i < ndoutputs.size(); ++i) {
     SaveInfo(ndoutputs[i], save_outputs[i]);
   }
+  return pos;
 }
+
+uint32_t AutogradTape::Record(
+    const NodeAttrs& attrs,
+    const vector<NDArray*>& ndinputs,
+    const vector<NDArray*>& ndoutputs,
+    OpStatePtr state) {
+  if (saved_states_.size() != saved_graph_states_.size()) {
+    CHECK_LT(saved_states_.size(), saved_graph_states_.size());
+    saved_states_.resize(saved_graph_states_.size());
+  }
+  saved_states_.push_back(state);
+  return Record(attrs, ndinputs, ndoutputs);
+}
+
+uint32_t AutogradTape::Record(
+    const NodeAttrs& attrs,
+    const vector<NDArray*>& ndinputs,
+    const vector<NDArray*>& ndoutputs,
+    ColumnRef<OpStatePtr> graph_state) {
+  if (saved_graph_states_.size() != saved_states_.size()) {
+    CHECK_LT(saved_graph_states_.size(), saved_states_.size());
+    saved_graph_states_.resize(saved_states_.size());
+  }
+  saved_graph_states_.push_back(graph_state);
+  return Record(attrs, ndinputs, ndoutputs);
+}
+
 
 void AutogradTape::NewSession() {
   tape::Tape::Get(tape::kGradTape).NewSession();
   grad_attached_entries_.clear();
   saved_info_.clear();
+  saved_states_.clear();
+  saved_graph_states_.clear();
 }
 
 void AutogradTape::AttachGrad(tape::TapeEntryId teid,
@@ -158,6 +188,8 @@ Graph AutogradTape::SpecializeForwardGraph(
   auto* values = graph.CreateOrWriteEntryColumn<NDArray>("value");
   auto* grad_buffers = graph.CreateOrWriteEntryColumn<NDArray>("grad_buffer");
   auto* req_type = graph.CreateOrWriteEntryColumn<OpReqType>("op_req");
+  auto* states = graph.CreateOrWriteNodeColumn<OpStatePtr>("state");
+  // TODO(minjie): It is better to loop over graph nodes rather than the whole tape.
   for (uint32_t pos = 0; pos < grad_tape.size(); ++pos) {
     const Node* node = grad_tape[pos].node.get();
     if (!graph_idx.exist(node)) {
@@ -173,8 +205,15 @@ Graph AutogradTape::SpecializeForwardGraph(
       grad_buffers->value[eid] = info.grad_buffer;
       req_type->value[eid] = info.req_type;
     }
+    if (node->is_graph()) {
+      states->children[nid] = saved_graph_states_[pos];
+    } else {
+      states->value[nid] = saved_states_[pos];
+    }
   }
   saved_info_.clear();
+  saved_states_.clear();
+  saved_graph_states_.clear();
   return graph;
 }
 

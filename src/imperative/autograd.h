@@ -18,9 +18,15 @@ struct AGInfo2 {
 
 class AutogradTape {
  public:
-  void Record(const nnvm::NodeAttrs& attrs,
-              const std::vector<NDArray*>& ndinputs,
-              const std::vector<NDArray*>& ndoutputs);
+  uint32_t Record(const nnvm::NodeAttrs& attrs,
+                  const std::vector<NDArray*>& ndinputs,
+                  const std::vector<NDArray*>& ndoutputs,
+                  OpStatePtr state);
+
+  uint32_t Record(const nnvm::NodeAttrs& attrs,
+                  const std::vector<NDArray*>& ndinputs,
+                  const std::vector<NDArray*>& ndoutputs,
+                  nnvm::ColumnRef<OpStatePtr> graph_state);
 
   void AttachGrad(tape::TapeEntryId teid, OpReqType req_type, const NDArray& grad_buf);
 
@@ -40,6 +46,10 @@ class AutogradTape {
   static AutogradTape& Get();
 
  private:
+  uint32_t Record(const nnvm::NodeAttrs& attrs,
+                  const std::vector<NDArray*>& ndinputs,
+                  const std::vector<NDArray*>& ndoutputs);
+
   std::vector<nnvm::NodeEntry> GetGradTargets(
       const std::vector<const NDArray*>& xs) const;
 
@@ -51,6 +61,8 @@ class AutogradTape {
 
   std::vector<tape::TapeEntryId> grad_attached_entries_;
   std::vector<std::vector<AGInfo2>> saved_info_;
+  std::vector<OpStatePtr> saved_states_;
+  std::vector<nnvm::ColumnRef<OpStatePtr>> saved_graph_states_;
 };
 
 }  // namespace ag

@@ -19,7 +19,7 @@ struct Closure;
 // * Multi-devices, Data Parallelism
 class GraphExecutorV2 {
  public:
-  typedef nnvm::ColumnRef<std::shared_ptr<OpExecutorV2>> ExecState;
+  typedef nnvm::ColumnRef<FunctorInfo> ExecState;
   struct Config {
     bool dynamic_allocation{true};
     bool zero_copy{true};
@@ -32,7 +32,7 @@ class GraphExecutorV2 {
   };
 
   GraphExecutorV2(nnvm::GraphPtr graph,
-                  const ExecState& fwd_state = ExecState(),
+                  const ExecState& fwd_states = ExecState(),
                   const Config& config = Config());
 
   ~GraphExecutorV2();
@@ -47,7 +47,7 @@ class GraphExecutorV2 {
   // XXX(minjie): Note that once this is called, one must make sure that
   // the GraphExecutor will not be used any more. Otherwise,
   // the returned state may be polluted.
-  const ExecState& GetState() const { return op_execs_; }
+  const ExecState& states() const { return states_; }
 
   nnvm::GraphPtr graph() const { return graph_ptr_; }
 
@@ -73,12 +73,14 @@ class GraphExecutorV2 {
   // Configurations of this executor.
   const Config config_;
   // OpExecutors of forward graph.
-  const ExecState fwd_execs_;
+  const ExecState fwd_states_;
   // Attributes required for graph evaluation.
   const std::vector<std::string> required_graph_ptr_attrs_;
 
-  // Internal (stateful) operator executors.
-  ExecState op_execs_;
+  // Executor states.
+  ExecState states_;
+  // Internal operator executors.
+  nnvm::ColumnRef<std::shared_ptr<OpExecutorV2>> op_execs_;
   // Internal data structure for executing each node.
   nnvm::ColumnRef<Closure> closures_;
 

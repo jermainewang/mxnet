@@ -59,6 +59,8 @@ class Tape {
 
   void NewSession();
 
+  void EndSession();
+
   static Tape& Get(uint32_t tapeid);
 
  private:
@@ -69,7 +71,10 @@ class Tape {
 
   // Unique id of this tape.
   const uint32_t tape_id_;
+  // Session id.
   uint32_t session_id_ = 0;
+  // Whether the tape is enabled for recording.
+  bool enabled_ = false;
   // Recorded operations.
   std::vector<TapeEntry> tape_;
   // Positions of tape head entries.
