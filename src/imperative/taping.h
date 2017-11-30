@@ -61,6 +61,8 @@ class Tape {
 
   void EndSession();
 
+  bool enabled() const { return enabled_; }
+
   static Tape& Get(uint32_t tapeid);
 
  private:

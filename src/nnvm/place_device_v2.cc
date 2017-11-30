@@ -15,7 +15,7 @@ void PlaceDeviceDefaultRec(const Graph& graph,
       auto subgraph = node->graph();
       PlaceDeviceDefaultRec(*subgraph, device->children[nid].CopyOnWrite());
     } else {
-      // Do nothing.
+      device->value[nid] = 0;
     }
   }
 }
@@ -23,7 +23,7 @@ void PlaceDeviceDefaultRec(const Graph& graph,
 Graph MXPlaceDefaultDevice(Graph&& graph) {
   PlaceDeviceDefaultRec(graph,
       graph.CreateOrWriteNodeColumn<int>(ctx::device_key, 0));
-  const auto& ctx = GetPassArgument<vector<Context>>(graph, ctx::ctx_key);
+  const auto& ctx = GetPassArgument<vector<Context>>(graph, ctx::arg_name);
   graph.global_attrs[ctx::ctx_key] = std::make_shared<any>(ctx);
   return graph;
 }
@@ -32,7 +32,7 @@ NNVM_REGISTER_PASS(MXPlaceDefaultDevice)
 .describe("Assign all nodes to the default device.")
 .set_body(MXPlaceDefaultDevice)
 .set_change_graph(false)
-.set_argument(ctx::ctx_key)
+.set_argument(ctx::arg_name)
 .provide_global_attr(ctx::ctx_key)
 .provide_node_attr(ctx::device_key);
 

@@ -44,6 +44,7 @@ uint32_t AutogradTape::Record(
   // TODO(minjie): grad_tape should record operators whose parents are
   // 1. grad-attached; or 2. already on the tape.
   tape::Tape& tape = tape::Tape::Get(tape::kGradTape);
+  CHECK(tape.enabled());
   const uint32_t pos = tape.Record(attrs, ndinputs, ndoutputs);
   const auto& node = tape[pos].node;
   // Compute values to be saved.
@@ -80,26 +81,26 @@ uint32_t AutogradTape::Record(
     const NodeAttrs& attrs,
     const vector<NDArray*>& ndinputs,
     const vector<NDArray*>& ndoutputs,
-    OpStatePtr state) {
-  if (saved_states_.size() != saved_graph_states_.size()) {
-    CHECK_LT(saved_states_.size(), saved_graph_states_.size());
-    saved_states_.resize(saved_graph_states_.size());
+    const exec::FunctorInfo& state) {
+  uint32_t pos = Record(attrs, ndinputs, ndoutputs);
+  if (saved_states_.size() < pos) {
+    saved_states_.resize(pos);
   }
   saved_states_.push_back(state);
-  return Record(attrs, ndinputs, ndoutputs);
+  return pos;
 }
 
 uint32_t AutogradTape::Record(
     const NodeAttrs& attrs,
     const vector<NDArray*>& ndinputs,
     const vector<NDArray*>& ndoutputs,
-    ColumnRef<OpStatePtr> graph_state) {
-  if (saved_graph_states_.size() != saved_states_.size()) {
-    CHECK_LT(saved_graph_states_.size(), saved_states_.size());
-    saved_graph_states_.resize(saved_states_.size());
+    ColumnRef<exec::FunctorInfo> graph_state) {
+  uint32_t pos = Record(attrs, ndinputs, ndoutputs);
+  if (saved_graph_states_.size() < pos) {
+    saved_graph_states_.resize(pos);
   }
   saved_graph_states_.push_back(graph_state);
-  return Record(attrs, ndinputs, ndoutputs);
+  return pos;
 }
 
 
@@ -109,6 +110,15 @@ void AutogradTape::NewSession() {
   saved_info_.clear();
   saved_states_.clear();
   saved_graph_states_.clear();
+}
+
+void AutogradTape::EndSession() {
+  if (saved_states_.size() < saved_graph_states_.size()) {
+    saved_states_.resize(saved_graph_states_.size());
+  } else if (saved_graph_states_.size() < saved_states_.size()) {
+    saved_graph_states_.resize(saved_states_.size());
+  }
+  tape::Tape::Get(tape::kGradTape).EndSession();
 }
 
 void AutogradTape::AttachGrad(tape::TapeEntryId teid,
@@ -188,7 +198,7 @@ Graph AutogradTape::SpecializeForwardGraph(
   auto* values = graph.CreateOrWriteEntryColumn<NDArray>("value");
   auto* grad_buffers = graph.CreateOrWriteEntryColumn<NDArray>("grad_buffer");
   auto* req_type = graph.CreateOrWriteEntryColumn<OpReqType>("op_req");
-  auto* states = graph.CreateOrWriteNodeColumn<OpStatePtr>("state");
+  auto* states = graph.CreateOrWriteNodeColumn<exec::FunctorInfo>("state");
   // TODO(minjie): It is better to loop over graph nodes rather than the whole tape.
   for (uint32_t pos = 0; pos < grad_tape.size(); ++pos) {
     const Node* node = grad_tape[pos].node.get();
@@ -281,7 +291,7 @@ GraphPtr AutogradTape::GetSpecializedBackwardGraph(
   std::unordered_map<std::string, std::shared_ptr<any>> kwargs_any;
   kwargs_any[pass::shape::arg_name] = std::make_shared<any>(std::move(shape_args));
   kwargs_any[pass::dtype::arg_name] = std::make_shared<any>(std::move(dtype_args));
-  kwargs_any[pass::ctx::ctx_key] = std::make_shared<any>(std::move(ctx));
+  kwargs_any[pass::ctx::arg_name] = std::make_shared<any>(std::move(ctx));
   kwargs_any[pass::plan_memory::arg_name] = std::make_shared<any>(std::move(pm_args));
   kwargs_any["graph_frozen"] = std::make_shared<any>(1);
   nnvm::Specialize(bwd_graph.get(), kwargs_any);
@@ -295,9 +305,10 @@ GraphPtr AutogradTape::GetSpecializedBackwardGraph(
     }
   }*/
 
-  auto values = fwd_graph.entry_attrs.MoveColumn<NDArray>("value");
+  auto fwd_values = fwd_graph.entry_attrs.MoveColumn<NDArray>("value");
   auto grad_buffers = fwd_graph.entry_attrs.MoveColumn<NDArray>("grad_buffer");
   auto req_type = fwd_graph.entry_attrs.MoveColumn<OpReqType>("op_req");
+  auto fwd_states = fwd_graph.node_attrs.MoveColumn<exec::FunctorInfo>("state");
   // Pack all inputs.
   const auto& in_info = bwd_graph->GetGlobalAttr<vector<GradNodeInInfo>>("grad_node_in_info");
   vector<NDArray> arguments;
@@ -317,8 +328,8 @@ GraphPtr AutogradTape::GetSpecializedBackwardGraph(
     case GradNodeInInfo::kFromFwdOut:
       {
       const uint32_t eid = fwd_graph_idx.entry_id(fwd_graph.outputs[info.index]);
-      CHECK(!values->value[eid].is_none());
-      arguments.push_back(values->value[eid]);
+      CHECK(!fwd_values->value[eid].is_none());
+      arguments.push_back(fwd_values->value[eid]);
       }
       break;
     case GradNodeInInfo::kFromFwdIn:
@@ -326,8 +337,8 @@ GraphPtr AutogradTape::GetSpecializedBackwardGraph(
       const uint32_t nid = fwd_graph_idx.input_nodes()[info.index];
       CHECK(fwd_graph_idx[nid].source->is_variable());
       const uint32_t eid = fwd_graph_idx.entry_id(nid, 0);
-      CHECK(!values->value[eid].is_none());
-      arguments.push_back(values->value[eid]);
+      CHECK(!fwd_values->value[eid].is_none());
+      arguments.push_back(fwd_values->value[eid]);
       }
       break;
     default:
@@ -345,7 +356,7 @@ GraphPtr AutogradTape::GetSpecializedBackwardGraph(
     result_reqs.emplace_back(req_type->value[eid]);
   }
   // Execute.
-  exec::GraphExecutorV2 exec(bwd_graph);
+  exec::GraphExecutorV2 exec(bwd_graph, fwd_states);
   exec::GraphExecutorV2::RunOption opt;
   opt.is_train = true;
   exec.Run(arguments, result_reqs, &results, opt);

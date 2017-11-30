@@ -250,7 +250,7 @@ class InferAttrPass {
         if (fwd_attr_col != nullptr) {
           // Forward node is in another subgraph.
           const auto& node_mapping =
-            sg->GetGlobalAttr<vector<uint32_t>>("gradient_node_mapping");
+            graph->GetGlobalAttr<vector<uint32_t>>("gradient_node_mapping");
           const uint32_t fwd_nid = node_mapping[nid];
           CHECK_LT(fwd_nid, fwd_attr_col->children.size());
           sub_fwd_attr_col = fwd_attr_col->children[fwd_nid].get();
@@ -264,7 +264,6 @@ class InferAttrPass {
           sub_fwd_attr_col = attr->children[fwd_nid].get();
         }
       }
-      DLOG(INFO) << ">>>>Infer subgraph node: " << node->attrs.name;
       return this->Infer(sg.get(), subattr, sub_fwd_attr_col);
     }
     // Fetch input/output attribute.

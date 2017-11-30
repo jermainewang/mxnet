@@ -3,6 +3,7 @@
 
 #include <mxnet/op_attr_types.h>
 #include "./taping.h"
+#include "../nnvm/mx_passes.h"
 
 namespace mxnet {
 namespace ag {
@@ -21,12 +22,12 @@ class AutogradTape {
   uint32_t Record(const nnvm::NodeAttrs& attrs,
                   const std::vector<NDArray*>& ndinputs,
                   const std::vector<NDArray*>& ndoutputs,
-                  OpStatePtr state);
+                  const exec::FunctorInfo& state);
 
   uint32_t Record(const nnvm::NodeAttrs& attrs,
                   const std::vector<NDArray*>& ndinputs,
                   const std::vector<NDArray*>& ndoutputs,
-                  nnvm::ColumnRef<OpStatePtr> graph_state);
+                  nnvm::ColumnRef<exec::FunctorInfo> graph_state);
 
   void AttachGrad(tape::TapeEntryId teid, OpReqType req_type, const NDArray& grad_buf);
 
@@ -42,6 +43,8 @@ class AutogradTape {
   }
 
   void NewSession();
+
+  void EndSession();
 
   static AutogradTape& Get();
 
@@ -61,8 +64,8 @@ class AutogradTape {
 
   std::vector<tape::TapeEntryId> grad_attached_entries_;
   std::vector<std::vector<AGInfo2>> saved_info_;
-  std::vector<OpStatePtr> saved_states_;
-  std::vector<nnvm::ColumnRef<OpStatePtr>> saved_graph_states_;
+  std::vector<exec::FunctorInfo> saved_states_;
+  std::vector<nnvm::ColumnRef<exec::FunctorInfo>> saved_graph_states_;
 };
 
 }  // namespace ag

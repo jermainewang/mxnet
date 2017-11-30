@@ -4,7 +4,6 @@
  * \brief Executor to execute the computation graph.
  */
 #include "./graph_executor_v2.h"
-#include <mxnet/imperative.h>
 
 using namespace std;
 using namespace nnvm;
@@ -202,16 +201,15 @@ inline Engine::OprHandle CreateCachedOpr(
 void AttachOpClosuresRec(const Graph& graph,
                          const Column<int>* vdevice,
                          const Column<StorageRef>* mem_plan,
+                         const vector<Context>& context,
                          Column<Closure>* closures) {
   const auto& idx = graph.indexed_graph();
-  const auto& context = graph.GetGlobalAttr<vector<Context>>(pass::ctx::ctx_key);
   for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
     Closure& cl = closures->value[nid];
     const Node* node = idx[nid].source;
     if (node->is_variable()) {
       continue;
     }
-    cl.opr_name = node->op()->name;
     if (node->is_graph()) {
       // XXX(minjie): Note that subgraph operator closures are currently never reused.
       // To reuse them, one must make sure the OpExecutorV2 can be reused.
@@ -220,8 +218,10 @@ void AttachOpClosuresRec(const Graph& graph,
       AttachOpClosuresRec(*subgraph,
                           vdevice->children[nid].get(),
                           mem_plan->children[nid].get(),
+                          context,
                           closures->children[nid].CopyOnWrite());
     } else {
+      cl.opr_name = node->op()->name;
       cl.in_array.resize(node->inputs.size());
       cl.out_array.resize(node->num_outputs());
       cl.ctx = context.at(vdevice->value[nid]);
@@ -319,24 +319,28 @@ void GraphExecutorV2::AttachOps() {
   const auto* mem_plan = graph_ptr_->entry_attrs.GetColumn<StorageRef>(plan_memory::ref_key).get();
   const auto* vdevice = graph_ptr_->node_attrs.GetColumn<int>(ctx::device_key).get();
   const auto* mutate = graph_ptr_->node_attrs.GetColumn<vector<uint32_t>>(mutate::key).get();
+  const auto& context = graph_ptr_->GetGlobalAttr<vector<Context>>(pass::ctx::ctx_key);
   states_ = CreateNodeColumn<FunctorInfo>(*graph_ptr_);
   AttachFunctorInfoRec(*graph_ptr_,
                        shapes,
                        dtypes,
                        vdevice,
                        fwd_states_.get(),
+                       context,
                        states_.CopyOnWrite());
   op_execs_ = CreateNodeColumn<shared_ptr<OpExecutorV2>>(*graph_ptr_);
   AttachOpExecsRec(*graph_ptr_,
                    mem_plan,
                    vdevice,
                    mutate,
-                   fwd_states_.get(),
+                   states_.get(),
+                   context,
                    op_execs_.CopyOnWrite());
   closures_ = CreateNodeColumn<Closure>(*graph_ptr_);
   AttachOpClosuresRec(*graph_ptr_,
                       vdevice,
                       mem_plan,
+                      context,
                       closures_.CopyOnWrite());
 }
 
@@ -399,13 +403,6 @@ void GraphExecutorV2::Run(const vector<NDArray>& arguments,
     RunOpsInBulk();
   } else {
     RunOps();
-  }
-
-  if (Imperative::Get()->is_recording()) {
-    //TODO(state)
-    //exec->GetState();
-    NodeAttrs attrs;
-    //Imperative::Get()->RecordOp(std::move(attrs), arguments, results);
   }
 }
 

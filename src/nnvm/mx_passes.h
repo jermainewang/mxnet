@@ -155,6 +155,7 @@ struct MXInferTypeArgs {
 }  // namespace dtype
 
 namespace ctx {
+static const std::string arg_name = "mx_place_device_arg";
 static const std::string device_key = "device";
 static const std::string ctx_key = "context";
 }  // namespace ctx
@@ -213,7 +214,7 @@ enum class FunctorType {
 
 struct FunctorInfo {
   OpStatePtr state;
-  FunctorType type;
+  FunctorType type = FunctorType::kUndefined;
 };
 
 /*!
@@ -276,6 +277,7 @@ void AttachFunctorInfoRec(
     const nnvm::Column<int>* vdtype,
     const nnvm::Column<int>* vdevice,
     const nnvm::Column<FunctorInfo>* fwd_infos,
+    const std::vector<Context>& context,
     nnvm::Column<FunctorInfo>* infos);
 
 void AttachOpExecsRec(
@@ -284,6 +286,7 @@ void AttachOpExecsRec(
     const nnvm::Column<int>* vdevice,
     const nnvm::Column<std::vector<uint32_t>>* mutate_index,
     const nnvm::Column<FunctorInfo>* infos,
+    const std::vector<Context>& context,
     nnvm::Column<std::shared_ptr<OpExecutorV2>>* execs);
 }  // namespace exec
 

@@ -200,11 +200,11 @@ void AttachFunctorInfoRec(
     const Column<int>* vdtype,
     const Column<int>* vdevice,
     const Column<FunctorInfo>* fwd_infos,
+    const vector<Context>& context,
     Column<FunctorInfo>* infos) {
   static auto& fcreate_layer_op = nnvm::Op::GetAttr<FCreateOpState>("FCreateOpState");
   static auto& is_layer_backward = nnvm::Op::GetAttr<bool>("TIsLayerOpBackward");
   const auto& idx = g.indexed_graph();
-  const auto& context = g.GetGlobalAttr<vector<Context>>(pass::ctx::ctx_key);
 
   if (fwd_infos != nullptr) {
     // This is a standalone backward graph.
@@ -217,9 +217,10 @@ void AttachFunctorInfoRec(
       const uint32_t fwd_nid = gradient_node_mapping[nid];
       if (fwd_nid < fwd_infos->value.size()) {
         const auto& fwd_info = fwd_infos->value[fwd_nid];
-        CHECK(fwd_info.type == FunctorType::kForward);
-        infos->value[nid].type = FunctorType::kBackward;
-        infos->value[nid].state = fwd_info.state;
+        if (fwd_info.type == FunctorType::kForward) {
+          infos->value[nid].type = FunctorType::kBackward;
+          infos->value[nid].state = fwd_info.state;
+        }
       }
     }
   }
@@ -240,9 +241,9 @@ void AttachFunctorInfoRec(
       const Column<FunctorInfo>* sub_fwd_infos = nullptr;
       if (subgraph->global_attrs.count("gradient_node_mapping")) {
         if (fwd_infos != nullptr) {
-          // Forward node is in another subgraph.
+          // Forward node info is provided.
           const auto& node_mapping =
-            subgraph->GetGlobalAttr<vector<uint32_t>>("gradient_node_mapping");
+            g.GetGlobalAttr<vector<uint32_t>>("gradient_node_mapping");
           const uint32_t fwd_nid = node_mapping[nid];
           CHECK_LT(fwd_nid, fwd_infos->children.size());
           sub_fwd_infos = fwd_infos->children[fwd_nid].get();
@@ -261,6 +262,7 @@ void AttachFunctorInfoRec(
                        vdtype->children[nid].get(),
                        vdevice->children[nid].get(),
                        sub_fwd_infos,
+                       context,
                        infos->children[nid].CopyOnWrite());
     } else {
       auto& info = infos->value[nid];
@@ -297,11 +299,11 @@ void AttachOpExecsRec(
     const Column<int>* vdevice,
     const Column<vector<uint32_t>>* mutate_index,
     const Column<FunctorInfo>* infos,
+    const vector<Context>& context,
     Column<shared_ptr<OpExecutorV2>>* execs) {
   using pass::plan_memory::StorageRef;
   using pass::plan_memory::kNull;
   const auto& idx = g.indexed_graph();
-  const auto& context = g.GetGlobalAttr<vector<Context>>(pass::ctx::ctx_key);
 
   for (size_t nid = 0; nid < idx.num_nodes(); ++nid) {
     const Node* node = idx[nid].source;
@@ -320,6 +322,7 @@ void AttachOpExecsRec(
                        vdevice->children[nid].get(),
                        mutate_index->children[nid].get(),
                        infos->children[nid].get(),
+                       context,
                        execs->children[nid].CopyOnWrite());
     } else {
       switch (infos->value[nid].type) {
@@ -330,6 +333,7 @@ void AttachOpExecsRec(
           CHECK_NOTNULL(fcompute);
           execs->value[nid] = std::make_shared<FComputeExecutorV2>(
               fcompute, node->attrs, node->inputs.size(), node->num_outputs());
+          break;
         }
       case FunctorType::kForward:
         {
@@ -337,6 +341,7 @@ void AttachOpExecsRec(
               infos->value[nid].state,
               mxnet::op::OpPropGetOpProperty(node->attrs),
               mutate_index->value[nid]);
+          break;
         }
       case FunctorType::kBackward:
         {
@@ -344,9 +349,10 @@ void AttachOpExecsRec(
               infos->value[nid].state,
               mxnet::op::OpPropGetOpProperty(node->attrs),
               mutate_index->value[nid]);
+          break;
         }
       case FunctorType::kUndefined:
-        LOG(INFO) << "No functor registered for operator \"" << node->op()->name << "\".";
+        LOG(FATAL) << "No functor registered for operator \"" << node->op()->name << "\".";
       }
       // Setup output requests.
       OpExecutorV2* exec = execs->value[nid].get();

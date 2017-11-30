@@ -159,7 +159,15 @@ void MXImperativeInvokeImpl(AtomicSymbolCreator creator,
   }
 #else
   if (Imperative::Get()->is_recording()) {
-    ag::AutogradTape::Get().Record(attrs, ndinputs, ndoutputs);
+    // TODO(minjie): The functor type should be set in a more accurate way.
+    exec::FunctorInfo info;
+    if (state) {
+      info.type = exec::FunctorType::kForward;
+    } else {
+      info.type = exec::FunctorType::kFCompute;
+    }
+    info.state = state;
+    ag::AutogradTape::Get().Record(attrs, ndinputs, ndoutputs, info);
   }
 #endif
 
@@ -328,6 +336,8 @@ int MXAutogradSetIsRecording(int is_recording, int* prev) {
 #ifndef USE_LEGACY_AUTOGRAD
   if (Imperative::Get()->is_recording() && is_recording == false) {
     // Turning off previous recording tape.
+    ag::AutogradTape::Get().EndSession();
+  } else if (!Imperative::Get()->is_recording() && is_recording == true) {
     ag::AutogradTape::Get().NewSession();
   }
 #endif
@@ -431,8 +441,9 @@ int MXAutogradBackwardEx(mx_uint num_output,
     *grad_stypes = dmlc::BeginPtr(ret->out_types);
   }
 #else
-  ag::AutogradTape::Get().GetSpecializedBackwardGraph(
-      outputs, variables, ograds);
+  auto& autograd = ag::AutogradTape::Get();
+  autograd.EndSession();
+  autograd.GetSpecializedBackwardGraph(outputs, variables, ograds);
   // Evaluate the backward graph.
   // 0. Specialize for context.
   // 1. Make the correct input and output args.

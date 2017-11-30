@@ -98,7 +98,7 @@ void RunGraph(exec::GraphExecutorV2* exec,
     for (size_t i = 0; i < results.size(); ++i) {
       ndoutputs[i] = &results[i];
     }
-    ag::AutogradTape::Get().Record(attrs, ndinputs, ndoutputs);
+    ag::AutogradTape::Get().Record(attrs, ndinputs, ndoutputs, exec->states());
   }
 
   if (rsts_ptr == nullptr) {
@@ -133,6 +133,11 @@ void _SpecializeByNDArrays(nnvm::Graph* graph, int num_arrays, NDArrayHandle *ar
   dtype_args.dtype_inputs = std::move(dtype_inputs);
   kwargs_any[pass::shape::arg_name] = std::make_shared<any>(std::move(shape_args));
   kwargs_any[pass::dtype::arg_name] = std::make_shared<any>(std::move(dtype_args));
+  if (num_arrays > 0) {
+    // TODO(minjie): ctx.
+    std::vector<Context> ctx = {static_cast<NDArray*>(arrays[0])->ctx()};
+    kwargs_any[pass::ctx::arg_name] = std::make_shared<any>(std::move(ctx));
+  }
   nnvm::Specialize(graph, kwargs_any);
 }
 
@@ -380,7 +385,7 @@ int MXGraphEval(GraphHandle ghdl,
   using nnvm::any;
   std::unordered_map<std::string, std::shared_ptr<any>> kwargs_any;
   std::vector<Context> ctx = {Context::CPU(0)};
-  kwargs_any[pass::ctx::ctx_key] = std::make_shared<any>(std::move(ctx));
+  kwargs_any[pass::ctx::arg_name] = std::make_shared<any>(std::move(ctx));
   nnvm::Specialize(pg.get(), kwargs_any);
 
   GraphExecutorV2 exec(pg);
@@ -410,7 +415,7 @@ int MXExecV2Create(GraphHandle ghdl,
   using nnvm::any;
   std::unordered_map<std::string, std::shared_ptr<any>> kwargs_any;
   std::vector<Context> ctx = {Context::CPU(0)};
-  kwargs_any["context"] = std::make_shared<any>(std::move(ctx));
+  kwargs_any[pass::ctx::arg_name] = std::make_shared<any>(std::move(ctx));
   nnvm::Specialize(pg.get(), kwargs_any);
 
   GraphExecutorV2::ExecState fwd_state;

@@ -49,6 +49,7 @@ NodePtr Tape::NewVariable() {
 uint32_t Tape::Record(const NodeAttrs& attrs,
                       const vector<NDArray*>& inputs,
                       const vector<NDArray*>& outputs) {
+  CHECK(enabled_);
   NodePtr node = NewNode(attrs);
   for (size_t i = 0; i < inputs.size(); ++i) {
     const TapeEntryId teid = inputs[i]->tape_entry_id();
@@ -89,8 +90,16 @@ Graph Tape::GetGraph(const std::vector<const NDArray*>& arrays) const {
 }
 
 void Tape::NewSession() {
+  if (enabled_) {
+    EndSession();
+  }
   tape_.clear();
   ++session_id_;
+  enabled_ = true;
+}
+
+void Tape::EndSession() {
+  enabled_ = false;
 }
 
 Tape& Tape::Get(uint32_t tapeid) {
