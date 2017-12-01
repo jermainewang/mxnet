@@ -104,7 +104,7 @@ class InferAttrPass {
           num_unknown += InferOneNode(graph, nid, attr_col, fwd_attr_col);
         }
       }
-      LOG(INFO) << "#Unknown=" << num_unknown;
+      DLOG(INFO) << "#Unknown=" << num_unknown;
       if (num_unknown == min_num_unknown || num_unknown == 0) {
         break;
       } else {

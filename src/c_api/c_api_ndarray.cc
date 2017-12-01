@@ -220,7 +220,9 @@ int MXImperativeInvokeEx(AtomicSymbolCreator creator,
 
 int MXCreateCachedOp(SymbolHandle handle,
                      CachedOpHandle *out) {
+#ifndef USE_LEGACY_AUTOGRAD
   LOG(FATAL) << "Cached op has been disabled.";
+#endif
   nnvm::Symbol* sym = static_cast<nnvm::Symbol*>(handle);
 
   API_BEGIN();
@@ -241,7 +243,9 @@ int MXInvokeCachedOp(CachedOpHandle handle,
                      NDArrayHandle *inputs,
                      int *num_outputs,
                      NDArrayHandle **outputs) {
+#ifndef USE_LEGACY_AUTOGRAD
   LOG(FATAL) << "Cached op has been disabled.";
+#endif
 
   static const auto cached_op = nnvm::Op::Get("_CachedOp");
   MXAPIThreadLocalEntry *ret = MXAPIThreadLocalStore::Get();
@@ -297,7 +301,9 @@ int MXInvokeCachedOpEx(CachedOpHandle handle,
                        int *num_outputs,
                        NDArrayHandle **outputs,
                        const int **out_stypes) {  // outputs storage types
+#ifndef USE_LEGACY_AUTOGRAD
   LOG(FATAL) << "Cached op has been disabled.";
+#endif
 
   MXAPIThreadLocalEntry *ret = MXAPIThreadLocalStore::Get();
   int err = MXInvokeCachedOp(handle, num_inputs, inputs, num_outputs, outputs);
@@ -444,9 +450,6 @@ int MXAutogradBackwardEx(mx_uint num_output,
   auto& autograd = ag::AutogradTape::Get();
   autograd.EndSession();
   autograd.GetSpecializedBackwardGraph(outputs, variables, ograds);
-  // Evaluate the backward graph.
-  // 0. Specialize for context.
-  // 1. Make the correct input and output args.
   
   //LOG(FATAL) << "Not Implemented.";
 

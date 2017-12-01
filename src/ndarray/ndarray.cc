@@ -34,6 +34,7 @@
 #include "../common/utils.h"
 #include "../operator/tensor/matrix_op-inl.h"
 #include "../operator/tensor/init_op.h"
+#include "../imperative/autograd.h"
 
 #if MXNET_USE_OPENCV
 #include <opencv2/opencv.hpp>
@@ -46,6 +47,7 @@ DMLC_REGISTRY_ENABLE(::mxnet::NDArrayFunctionReg);
 namespace mxnet {
 
 NDArray NDArray::grad() const {
+#ifdef USE_LEGACY_AUTOGRAD
   if (Imperative::AGInfo::IsNone(*this)) return NDArray();
   Imperative::AGInfo& info = Imperative::AGInfo::Get(entry_.node);
   if (info.out_grads.size()) {
@@ -53,6 +55,10 @@ NDArray NDArray::grad() const {
     return info.out_grads[0];
   }
   return NDArray();
+#else
+  const auto& attached = GetAttachedGrad();
+  return attached.second;
+#endif
 }
 
 nnvm::Symbol NDArray::get_autograd_symbol() const {

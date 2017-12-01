@@ -110,6 +110,7 @@ void RunGraph(exec::GraphExecutorV2* exec,
     *outputs = dmlc::BeginPtr(ret->ret_handles);
   }
 }
+static const Context _test_ctx = Context::GPU(0);
 }  // namespace
 
 void _SpecializeByNDArrays(nnvm::Graph* graph, int num_arrays, NDArrayHandle *arrays) {
@@ -330,12 +331,11 @@ int MXGraphCreateInputArrays(GraphHandle graph,
   const auto& dtypes = pg->entry_attrs.GetColumn<int>("dtype");
   ret->ret_handles.clear();
   // TODO(minjie): context.
-  const Context& ctx = Context::CPU();
   for (int i = 0; i < *num_inputs; ++i) {
     const uint32_t eid = idx.entry_id(idx.input_nodes()[i], 0);
     ret->ret_handles.push_back(
         reinterpret_cast<NDArrayHandle>(new NDArray(
-            shapes->value[eid], ctx, true, dtypes->value[eid])));
+            shapes->value[eid], _test_ctx, true, dtypes->value[eid])));
   }
   *in_arrays = dmlc::BeginPtr(ret->ret_handles);
   API_END();
@@ -357,12 +357,11 @@ int MXGraphCreateOutputArrays(GraphHandle graph,
   const auto& dtypes = pg->entry_attrs.GetColumn<int>("dtype");
   ret->ret_handles.clear();
   // TODO(minjie): context.
-  const Context& ctx = Context::CPU();
   for (int i = 0; i < *num_outputs; ++i) {
     const uint32_t eid = idx.entry_id(pg->outputs[i]);
     ret->ret_handles.push_back(
         reinterpret_cast<NDArrayHandle>(new NDArray(
-            shapes->value[eid], ctx, true, dtypes->value[eid])));
+            shapes->value[eid], _test_ctx, true, dtypes->value[eid])));
   }
   *out_arrays = dmlc::BeginPtr(ret->ret_handles);
   API_END();
@@ -384,7 +383,7 @@ int MXGraphEval(GraphHandle ghdl,
   // TODO(minjie): hard-code for testing.
   using nnvm::any;
   std::unordered_map<std::string, std::shared_ptr<any>> kwargs_any;
-  std::vector<Context> ctx = {Context::CPU(0)};
+  std::vector<Context> ctx = {_test_ctx};
   kwargs_any[pass::ctx::arg_name] = std::make_shared<any>(std::move(ctx));
   nnvm::Specialize(pg.get(), kwargs_any);
 
@@ -414,7 +413,7 @@ int MXExecV2Create(GraphHandle ghdl,
   // TODO(minjie): hard-code for testing.
   using nnvm::any;
   std::unordered_map<std::string, std::shared_ptr<any>> kwargs_any;
-  std::vector<Context> ctx = {Context::CPU(0)};
+  std::vector<Context> ctx = {_test_ctx};
   kwargs_any[pass::ctx::arg_name] = std::make_shared<any>(std::move(ctx));
   nnvm::Specialize(pg.get(), kwargs_any);
 

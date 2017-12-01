@@ -23,8 +23,9 @@ void PlaceDeviceDefaultRec(const Graph& graph,
 Graph MXPlaceDefaultDevice(Graph&& graph) {
   PlaceDeviceDefaultRec(graph,
       graph.CreateOrWriteNodeColumn<int>(ctx::device_key, 0));
-  const auto& ctx = GetPassArgument<vector<Context>>(graph, ctx::arg_name);
-  graph.global_attrs[ctx::ctx_key] = std::make_shared<any>(ctx);
+  //const auto& ctx = GetPassArgument<vector<Context>>(graph, ctx::arg_name);
+  const std::vector<Context> ctx = {Context::GPU(0)};
+  graph.global_attrs[ctx::ctx_key] = std::make_shared<any>(std::move(ctx));
   return graph;
 }
 

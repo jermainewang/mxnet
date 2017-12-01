@@ -60,6 +60,15 @@ def test2():
         t.backward()
         PP(d.grad)
 
+def test3():
+    a = nd.ones((2, 3), ctx=ctx)
+    a.attach_grad()
+    with ag.record():
+        b = a * 2
+        b.backward()
+        PP(a.grad)
+
 #test()
 #test1()
 test2()
+#test3()

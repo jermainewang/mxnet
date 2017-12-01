@@ -6,7 +6,7 @@ from mxnet import autograd
 
 import time
 
-ctx = mx.cpu(0)
+ctx = mx.gpu(0)
 
 def sigmoid(F, x):
     return 1 / (1 + -F.exp(x))
@@ -91,14 +91,18 @@ def test_lstm():
     data = [nd.zeros((N, input_size), ctx=ctx) for i in range(length)]
     lstm = TrashLossLSTM(hidden_size, input_size)
     lstm.hybridize()
-    lstm.collect_params().initialize(ctx=ctx)
+    params = lstm.collect_params()
+    params.initialize(ctx=ctx)
     for i in range(20):
         t0 = time.time()
         #loss = lstm(data)
+        #loss.wait_to_read()
         with autograd.record():
             loss = lstm(data)
+            #loss.wait_to_read()
             loss.backward()
-        loss.wait_to_read()
+        for k, v in params.items():
+            v.grad().wait_to_read()
         print('Iter #%d, takes %fs' % (i, (time.time() - t0)))
 
 if __name__ == '__main__':

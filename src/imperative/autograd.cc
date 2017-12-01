@@ -266,7 +266,7 @@ GraphPtr AutogradTape::GetSpecializedBackwardGraph(
   dtype_args.forward_dtypes = fwd_graph.entry_attrs.GetColumn<int>(pass::dtype::key);
   // TODO(minjie): shape_inputs & dtype_inputs.
   // TODO(minjie): ctx.
-  std::vector<Context> ctx = {Context::CPU(0)};
+  std::vector<Context> ctx = {Context::GPU(0)};
   // Mark grad-attached entries with external storage so memory planning will
   // not share their spaces with others.
   // TODO(minjie): This is not necessary at the moment since all grad-attached

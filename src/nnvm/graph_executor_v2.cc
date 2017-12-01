@@ -447,6 +447,7 @@ void AttachOpClosuresRec(const Graph& graph,
         const StorageRef& store_ref = mem_plan->value[eid];
         const int storageid = mem_plan->value[eid].storage_id;
         // Output request.
+        // TODO(minjie): handle external request type.
         if (false) {
           // TODO(minjie): addto inplace optimization.
         } else if (store_ref.inplace_index >= 0) {
@@ -714,7 +715,7 @@ void GraphExecutorV2::RunOps() {
       } else {
         LOG(FATAL) << "Cannot execute Node#" << nid << " " << node->attrs.name;
       }
-        */
+      */
       if (config_.dynamic_allocation) {
         ResetClosure(node, &cl);
       }

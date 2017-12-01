@@ -5,6 +5,8 @@
 #include "./taping.h"
 #include "../nnvm/mx_passes.h"
 
+#define USE_LEGACY_AUTOGRAD
+
 namespace mxnet {
 namespace ag {
 
