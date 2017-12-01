@@ -54,16 +54,14 @@ class GraphExecutorV2 {
  private:
   void AttachOps();
   void SetupResources();
-  void SetupOpResources();
   void SetupDataEntries();
   void CheckAllowBulkExec() const;
 
-  void FeedArgArray(const NDArray& array, size_t i);
-  void FeedRstArray(const NDArray& array, size_t i);
   const NDArray& FetchRstArray(size_t i);
 
   void RunOps();
-  void RunOpsInBulk();
+  void RunOpsInBulk(const std::vector<NDArray>& arguments,
+                    const std::vector<NDArray>& results);
 
   void ResetDataEntries();
 
@@ -86,10 +84,6 @@ class GraphExecutorV2 {
 
   // Data entries.
   std::vector<NDArray> data_entries_;
-
-  // Data structure used to feed argument to the operator.
-  typedef std::pair<uint32_t, size_t> OpInputEntry;
-  std::vector<std::vector<OpInputEntry>> arg_to_op_input_;
 };
 
 }  // namespace exec

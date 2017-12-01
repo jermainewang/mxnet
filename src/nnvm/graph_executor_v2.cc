@@ -62,6 +62,7 @@ void SetupClosure(const Graph& graph,
                   const Column<int>* dtypes,
                   const Column<StorageRef>* mem_plan,
                   const vector<NDArray>& data_pool,
+                  const unordered_map<uint32_t, NDArray>& external_pool,
                   Closure* cl) {
   using pass::plan_memory::kExternalStorageID;
   using pass::plan_memory::kNull;
@@ -79,11 +80,8 @@ void SetupClosure(const Graph& graph,
     const uint32_t eid = idx.entry_id(node->inputs[i]);
     const StorageRef& store_ref = mem_plan->value[eid];
     const int storageid = mem_plan->value[eid].storage_id;
-    if (storageid >= 0) {
-      cl->in_array[i] = data_pool[storageid].AsArray(
-          shapes->value[eid], dtypes->value[eid]);
-    } else if (storageid == kExternalStorageID) {
-      CHECK(!cl->in_array[i].is_none());
+    if (external_pool.count(eid)) {  // Check external pool first.
+      cl->in_array[i] = external_pool.at(eid);
       //const auto& array = cl->in_array[i];
       //CHECK_EQ(shapes->value[eid], array.shape())
         //<< "Shape mismatch: expect " << shapes->value[eid]
@@ -91,21 +89,26 @@ void SetupClosure(const Graph& graph,
       //CHECK_EQ(dtypes->value[eid], array.dtype())
         //<< "DType mismatch: expect " << dtypes->value[eid]
         //<< " provided " << array.dtype();
+    } else if (storageid >= 0) {
+      cl->in_array[i] = data_pool[storageid].AsArray(
+          shapes->value[eid], dtypes->value[eid]);
     } else {
-      LOG(FATAL) << "Cannot create ndarray for entry#" << eid
-        << " with provided shape=" << shapes->value[eid]
-        << " & dtype=" << dtypes->value[eid];
+      if (storageid == kExternalStorageID) {
+        LOG(FATAL) << "Entry#" << eid << " requires external data"
+          << " but is not provided.";
+      } else {
+        LOG(FATAL) << "Cannot create ndarray for entry#" << eid
+          << " with provided shape=" << shapes->value[eid]
+          << " & dtype=" << dtypes->value[eid];
+      }
     }
   }
   // Output arrays.
   for (uint32_t i = 0; i < node->num_outputs(); ++i) {
     const uint32_t eid = idx.entry_id(nid, i);
     const int storageid = mem_plan->value[eid].storage_id;
-    if (storageid >= 0) {
-      cl->out_array[i] = data_pool[storageid].AsArray(
-          shapes->value[eid], dtypes->value[eid]);
-    } else if (storageid == kExternalStorageID) {
-      CHECK(!cl->out_array[i].is_none());
+    if (external_pool.count(eid)) {  // Check external pool first.
+      cl->out_array[i] = external_pool.at(eid);
       //const auto& array = cl->out_array[i];
       //CHECK_EQ(shapes->value[eid], array.shape())
         //<< "Shape mismatch: expect " << shapes->value[eid]
@@ -113,14 +116,25 @@ void SetupClosure(const Graph& graph,
       //CHECK_EQ(dtypes->value[eid], array.dtype())
         //<< "DType mismatch: expect " << dtypes->value[eid]
         //<< " provided " << array.dtype();
+    } else if (storageid >= 0) {
+      cl->out_array[i] = data_pool[storageid].AsArray(
+          shapes->value[eid], dtypes->value[eid]);
     } else if (storageid == kNull) {
-      // TODO(minjie): Context for null output?
+      // The output entry will never be used by any other nodes.
+      // However, we still need to create the memory so that the node that
+      // generates this output can be correctly executed.
+      // TODO(minjie): How to set context for null output?
       cl->out_array[i] = NDArray(shapes->value[eid],
           cl->ctx, true, dtypes->value[eid]);
     } else {
-      LOG(FATAL) << "Cannot create ndarray for entry#" << eid
-        << " with provided shape=" << shapes->value[eid]
-        << " & dtype=" << dtypes->value[eid];
+      if (storageid == kExternalStorageID) {
+        LOG(FATAL) << "Entry#" << eid << " requires external data"
+          << " but is not provided.";
+      } else {
+        LOG(FATAL) << "Cannot create ndarray for entry#" << eid
+          << " with provided shape=" << shapes->value[eid]
+          << " & dtype=" << dtypes->value[eid];
+      }
     }
   }
   // Requested resources.
@@ -222,16 +236,17 @@ void AttachOpClosuresRec(const Graph& graph,
                           closures->children[nid].CopyOnWrite());
     } else {
       cl.opr_name = node->op()->name;
-      cl.in_array.resize(node->inputs.size());
-      cl.out_array.resize(node->num_outputs());
-      cl.ctx = context.at(vdevice->value[nid]);
     }
+    cl.in_array.resize(node->inputs.size());
+    cl.out_array.resize(node->num_outputs());
+    cl.ctx = context.at(vdevice->value[nid]);
   }
 }
 
 // Check all operator closures and re-make those dirty ones.
 void SetupClosureRec(const Graph& graph,
                      const vector<NDArray>& data_pool,
+                     const unordered_map<uint32_t, NDArray>& external_pool,
                      const GraphExecutorV2::RunOption& option,
                      const Column<TShape>* shapes,
                      const Column<int>* dtypes,
@@ -247,8 +262,25 @@ void SetupClosureRec(const Graph& graph,
       // XXX(minjie): Note that subgraph operator closures are currently never reused.
       // To reuse them, one must make sure the OpExecutorV2 can be reused.
       // See attach_op_exec_pass_v2.cc
+      const auto& subidx = node->graph()->indexed_graph();
+      unordered_map<uint32_t, NDArray> new_ext_pool;
+      for (uint32_t i = 0; i < node->inputs.size(); ++i) {
+        const uint32_t eid = idx.entry_id(node->inputs[i]);
+        if (external_pool.count(eid)) {
+          const uint32_t subeid = subidx.entry_id(subidx.input_nodes()[i], 0);
+          new_ext_pool[subeid] = external_pool.at(eid);
+        }
+      }
+      for (uint32_t i = 0; i < node->num_outputs(); ++i) {
+        const uint32_t eid = idx.entry_id(nid, i);
+        if (external_pool.count(eid)) {
+          const uint32_t subeid = subidx.entry_id(node->graph()->outputs[i]);
+          new_ext_pool[subeid] = external_pool.at(eid);
+        }
+      }
       SetupClosureRec(*node->graph(),
                       data_pool,
+                      new_ext_pool,
                       option,
                       shapes->children[nid].get(),
                       dtypes->children[nid].get(),
@@ -260,11 +292,13 @@ void SetupClosureRec(const Graph& graph,
       if (cl.dirty) {
         // Create operator closure for dirty op.
         DLOG(INFO) << "Setup closure for node#" << nid << ": " << node->attrs.name;
-        SetupClosure(graph, nid, shapes, dtypes, mem_plan, data_pool, &cl);
+        SetupClosure(graph, nid, shapes, dtypes, mem_plan,
+                     data_pool, external_pool, &cl);
       }
     }
   }
 }
+
 void ResetClosure(const Node* node, Closure* cl) {
   cl->in_array.clear();
   cl->in_array.resize(node->inputs.size());
@@ -348,26 +382,24 @@ void GraphExecutorV2::Run(const vector<NDArray>& arguments,
                           const std::vector<OpReqType>& result_req,
                           vector<NDArray>* results,
                           const RunOption& option) {
+  // Sanity checks.
+  const auto& idx = graph_ptr_->indexed_graph();
+  CHECK_EQ(arguments.size(), idx.input_nodes().size());
+  CHECK_NOTNULL(results);
+  CHECK(results->empty() || results->size() == graph_ptr_->outputs.size());
+
   // TODO(minjie): currently use new operators for each run.
   AttachOps();
 
-  const auto& idx = graph_ptr_->indexed_graph();
-  DLOG(INFO) << "Graph execution starts.";
-  // Feed arguments.
-  DLOG(INFO) << "Feeding argument ndarrays.";
-  CHECK_EQ(arguments.size(), idx.input_nodes().size());
+  unordered_map<uint32_t, NDArray> external_pool;
   for (size_t i = 0; i < arguments.size(); ++i) {
-    FeedArgArray(arguments[i], i);
+    const uint32_t eid = idx.entry_id(idx.input_nodes()[i], 0);
+    external_pool[eid] = arguments[i];
   }
-  // Feed results.
-  CHECK_NOTNULL(results);
   if (!results->empty()) {
-    DLOG(INFO) << "Feeding result ndarrays.";
-    // Result storage is provided. Feed the result array
-    // as the output of the related operator.
-    CHECK_EQ(results->size(), graph_ptr_->outputs.size());
     for (size_t i = 0; i < results->size(); ++i) {
-      FeedRstArray((*results)[i], i);
+      const uint32_t eid = idx.entry_id(graph_ptr_->outputs[i]);
+      external_pool[eid] = (*results)[i];
     }
   }
 
@@ -377,6 +409,7 @@ void GraphExecutorV2::Run(const vector<NDArray>& arguments,
       pass::plan_memory::ref_key).get();
   SetupClosureRec(*graph_ptr_,
                   data_entries_,
+                  external_pool,
                   option,
                   shapes,
                   dtypes,
@@ -388,9 +421,6 @@ void GraphExecutorV2::Run(const vector<NDArray>& arguments,
     // Result array is not provided. Fetch the output arrays
     // of the graph as the result array.
     for (size_t i = 0; i < graph_ptr_->outputs.size(); ++i) {
-      //LOG(INFO) << "Fetch rst#" << i << " name="
-        //<< graph_ptr_.outputs[i].node->attrs.name << "_output"
-        //<< graph_ptr_.outputs[i].index;
       results->push_back(FetchRstArray(i));
     }
   }
@@ -400,7 +430,7 @@ void GraphExecutorV2::Run(const vector<NDArray>& arguments,
   }
 
   if (config_.bulk_execution) {
-    RunOpsInBulk();
+    RunOpsInBulk(arguments, *results);
   } else {
     RunOps();
   }
@@ -450,7 +480,8 @@ void GraphExecutorV2::RunOps() {
   }
 }
 
-void GraphExecutorV2::RunOpsInBulk() {
+void GraphExecutorV2::RunOpsInBulk(const vector<NDArray>& arguments,
+                                   const vector<NDArray>& results) {
   const auto& idx = graph_ptr_->indexed_graph();
   uint32_t first_non_var_nid = 0;
   for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
@@ -464,17 +495,22 @@ void GraphExecutorV2::RunOpsInBulk() {
   const bool is_train = closures_->value[first_non_var_nid].is_train;
   const bool is_gpu = bulkctx.dev_mask() == gpu::kDevMask;
   std::vector<Engine::VarHandle> use_vars, mutate_vars;
-  for (const auto& op_inent : arg_to_op_input_) {
-    const uint32_t nid = op_inent[0].first;
-    const size_t index = op_inent[0].second;
-    const NDArray& nd = closures_->value[nid].in_array[index];
+  for (const auto& nd : arguments) {
     use_vars.push_back(nd.var());
   }
-  std::ostringstream oss;
-  for (const auto& ent : idx.outputs()) {
-    const NDArray& nd = closures_->value[ent.node_id].out_array[ent.index];
+  for (const auto& nd : results) {
     mutate_vars.push_back(nd.var());
   }
+  //for (const auto& op_inent : arg_to_op_input_) {
+    //const uint32_t nid = op_inent[0].first;
+    //const size_t index = op_inent[0].second;
+    //const NDArray& nd = closures_->value[nid].in_array[index];
+    //use_vars.push_back(nd.var());
+  //}
+  //for (const auto& ent : idx.outputs()) {
+    //const NDArray& nd = closures_->value[ent.node_id].out_array[ent.index];
+    //mutate_vars.push_back(nd.var());
+  //}
   Engine::Get()->DeduplicateVarHandle(&use_vars, &mutate_vars);
   // TODO(minjie): how about temporary resources?
   shared_ptr<const Graph> graph = graph_ptr_;
@@ -518,26 +554,6 @@ void GraphExecutorV2::RunOpsInBulk() {
       PROFILER_MESSAGE("bulk-execution"));
 }
   
-void GraphExecutorV2::FeedArgArray(const NDArray& array, size_t i) {
-  const auto* shapes = graph_ptr_->entry_attrs.GetColumn<TShape>(pass::shape::key).get();
-  const auto* dtypes = graph_ptr_->entry_attrs.GetColumn<int>(pass::dtype::key).get();
-  const auto& idx = graph_ptr_->indexed_graph();
-  for (const OpInputEntry& ent : arg_to_op_input_[i]) {
-    const uint32_t nid = ent.first;
-    const size_t i = ent.second;
-    closures_.CopyOnWrite()->value[nid].in_array[i] = array;
-    closures_.CopyOnWrite()->value[nid].dirty = true;
-  }
-}
-
-void GraphExecutorV2::FeedRstArray(const NDArray& array, size_t i) {
-  const auto& idx = graph_ptr_->indexed_graph();
-  const NodeEntry& outent = graph_ptr_->outputs[i];
-  const uint32_t nid = idx.node_id(outent.node.get());
-  closures_.CopyOnWrite()->value[nid].out_array[outent.index] = array;
-  closures_.CopyOnWrite()->value[nid].dirty = true;
-}
-
 const NDArray& GraphExecutorV2::FetchRstArray(size_t i) {
   const auto& idx = graph_ptr_->indexed_graph();
   const NodeEntry& outent = graph_ptr_->outputs[i];
@@ -547,33 +563,10 @@ const NDArray& GraphExecutorV2::FetchRstArray(size_t i) {
 
 void GraphExecutorV2::SetupResources() {
   SetupDataEntries();
-  SetupOpResources();
 }
 
 const vector<string>& GraphExecutorV2::RequiredGraphAttrs() const {
   return required_graph_ptr_attrs_;
-}
-
-void GraphExecutorV2::SetupOpResources() {
-  // Save mapping from arguments to operator inputs.
-  const auto& idx = graph_ptr_->indexed_graph();
-  const auto& input_nids = idx.input_nodes();
-  arg_to_op_input_.resize(input_nids.size());
-  unordered_map<uint32_t, size_t> argnid2idx;
-  for (size_t i = 0; i < input_nids.size(); ++i) {
-    argnid2idx[input_nids[i]] = i;
-  }
-  for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
-    const Node* node = idx[nid].source;
-    for (size_t i = 0; i < node->inputs.size(); ++i) {
-      const Node* innode = node->inputs[i].node.get();
-      const uint32_t innid = idx.node_id(innode);
-      if (innode->is_variable()) {
-        arg_to_op_input_[argnid2idx[innid]].push_back(
-            std::make_pair(nid, i));
-      }
-    }
-  }
 }
 
 void GraphExecutorV2::ResetDataEntries() {
