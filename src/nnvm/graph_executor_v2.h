@@ -78,7 +78,7 @@ class GraphExecutorV2 {
   // Executor states.
   ExecState states_;
   // Internal operator executors.
-  nnvm::ColumnRef<std::shared_ptr<OpExecutorV2>> op_execs_;
+  //nnvm::ColumnRef<std::shared_ptr<OpExecutorV2>> op_execs_;
   // Internal data structure for executing each node.
   nnvm::ColumnRef<Closure> closures_;
 

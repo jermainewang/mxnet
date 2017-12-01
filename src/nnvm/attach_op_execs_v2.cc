@@ -14,185 +14,19 @@ using namespace std;
 using namespace nnvm;
 
 namespace mxnet {
-namespace op {
-const OperatorProperty* OpPropGetOpProperty(const NodeAttrs& attrs);
-}  // namespace op
-
 namespace exec {
-// forward executor
-class ForwardOpExecutorV2 : public OpExecutorV2 {
- public:
-  void Run(const OpContext& op_ctx) const override {
-    auto* opr = state_.get_state<op::OperatorState>().opr();
-    opr->Forward(op_ctx, in_data_, req, out_data_, aux_data_);
-#if MKL_EXPERIMENTAL == 1
-    mkl_tblobs_prv_to_cpu(in_data_);
-    mkl_tblobs_prv_to_cpu(out_data_);
-    mkl_tblobs_prv_to_cpu(aux_data_);
-#endif
+FCompute GetFCompute(const Op* op, Context ctx) {
+  static auto& fcompute_cpu = nnvm::Op::GetAttr<FCompute>("FCompute<cpu>");
+  static auto& fcompute_gpu = nnvm::Op::GetAttr<FCompute>("FCompute<gpu>");
+  if (ctx.dev_mask() == cpu::kDevMask) {
+    return fcompute_cpu.get(op, nullptr);
+  } else if (ctx.dev_mask() == gpu::kDevMask) {
+    return fcompute_gpu.get(op, nullptr);
+  } else {
+    LOG(FATAL) << "Unknown device mask";
+    return nullptr;
   }
-  ExecType exec_type() const override {
-    auto* opr = state_.get_state<op::OperatorState>().opr();
-    return opr->exec_type();
-  }
-  OpStatePtr state() const {
-    return state_;
-  }
-  explicit ForwardOpExecutorV2(OpStatePtr state,
-                               const OperatorProperty* prop,
-                               vector<uint32_t> aux_index)
-      : state_(state) {
-    const size_t num_inputs = prop->ListArguments().size() + aux_index.size();
-    const size_t num_outputs = prop->NumOutputs();
-    this->Reset(num_inputs, num_outputs);
-    out_data_.resize(prop->NumOutputs());
-    in_data_.resize(prop->ListArguments().size());
-    aux_data_.resize(aux_index.size());
-    // Setup in tblob pointer.
-    std::sort(aux_index.begin(), aux_index.end());
-    size_t nml_top = 0, aux_top = 0;
-    for (size_t i = 0; i < num_inputs; ++i) {
-      if (!std::binary_search(aux_index.begin(), aux_index.end(), i)) {
-        CHECK_GT(in_data_.size(), nml_top);
-        in_tblob_ptr_[i] = &in_data_[nml_top++];
-      } else {
-        CHECK_GT(aux_data_.size(), aux_top);
-        in_tblob_ptr_[i] = &aux_data_[aux_top++];
-      }
-    }
-    // Setup out tblob pointer.
-    for (size_t i = 0; i < num_outputs; ++i) {
-      out_tblob_ptr_[i] = &out_data_[i];
-    }
-  }
-
- private:
-  OpStatePtr state_;
-  vector<TBlob> in_data_, out_data_, aux_data_;
-};
-
-// backward executor
-class BackwardOpExecutorV2 : public OpExecutorV2 {
- public:
-  void Run(const OpContext& op_ctx) const override {
-    auto* opr = state_.get_state<op::OperatorState>().opr();
-    opr->Backward(op_ctx, out_grad_, in_data_, out_data_,
-                  req, in_grad_, aux_data_);
-#if MKL_EXPERIMENTAL == 1
-    mkl_tblobs_prv_to_cpu(out_grad_);
-    mkl_tblobs_prv_to_cpu(in_data_);
-    mkl_tblobs_prv_to_cpu(out_data_);
-    mkl_tblobs_prv_to_cpu(in_grad_);
-    mkl_tblobs_prv_to_cpu(aux_data_);
-#endif
-  }
-  ExecType exec_type() const override {
-    auto* opr = state_.get_state<op::OperatorState>().opr();
-    return opr->exec_type();
-  }
-  explicit BackwardOpExecutorV2(OpStatePtr state,
-                                const OperatorProperty* prop,
-                                vector<uint32_t> aux_index)
-      : state_(state) {
-    out_grad_.resize(prop->NumVisibleOutputs());
-    in_data_.resize(prop->ListArguments().size());
-    in_grad_.resize(in_data_.size());
-    out_data_.resize(prop->NumOutputs());
-    aux_data_.resize(aux_index.size());
-    // Compute backward dependencies.
-    vector<TBlob*> out_grad_ptr(out_grad_.size());
-    for (size_t i = 0; i < out_grad_.size(); ++i) {
-      out_grad_ptr[i] = &out_grad_[i];
-    }
-    vector<TBlob*> in_data_ptr(in_data_.size());
-    for (size_t i = 0; i < in_data_.size(); ++i) {
-      in_data_ptr[i] = &in_data_[i];
-    }
-    vector<TBlob*> out_data_ptr(out_data_.size());
-    for (size_t i = 0; i < out_data_.size(); ++i) {
-      out_data_ptr[i] = &out_data_[i];
-    }
-    vector<TBlob*> bwd_in_ptr = prop->BackwardInputs(
-        out_grad_ptr, in_data_ptr, out_data_ptr);
-    const size_t num_inputs = bwd_in_ptr.size() + aux_index.size();
-    const size_t num_outputs = in_data_.size();
-    this->Reset(num_inputs, num_outputs);
-    // Setup input tblob pointers.
-    std::sort(aux_index.begin(), aux_index.end());
-    size_t nml_top = 0, aux_top = 0;
-    for (size_t i = 0; i < num_inputs; ++i) {
-      if (!std::binary_search(aux_index.begin(), aux_index.end(), i)) {
-        CHECK_GT(bwd_in_ptr.size(), nml_top);
-        in_tblob_ptr_[i] = bwd_in_ptr[nml_top++];
-      } else {
-        CHECK_GT(aux_data_.size(), aux_top);
-        in_tblob_ptr_[i] = &aux_data_[aux_top++];
-      }
-    }
-    // Setup output tblob pointers.
-    for (size_t i = 0; i < out_tblob_ptr_.size(); ++i) {
-      out_tblob_ptr_[i] = &in_grad_[i];
-    }
-  }
-
- private:
-  OpStatePtr state_;
-  vector<TBlob> out_grad_, in_data_, out_data_, aux_data_;
-  vector<TBlob> in_grad_;
-};
-
-// fcompute executor executor
-class FComputeExecutorV2 : public OpExecutorV2 {
- public:
-  void Run(const OpContext& op_ctx) const override {
-    fcompute_(attrs_, op_ctx, in_data_, req, out_data_);
-#if MKL_EXPERIMENTAL == 1
-    mkl_tblobs_prv_to_cpu(in_data_);
-    mkl_tblobs_prv_to_cpu(out_data_);
-#endif
-  }
-  ExecType exec_type() const override {
-    return ExecType::kSync;
-  }
-  OpStatePtr state() const {
-    return OpStatePtr();
-  }
-  explicit FComputeExecutorV2(FCompute fcompute,
-                              const NodeAttrs& attrs,
-                              size_t num_inputs,
-                              size_t num_outputs)
-      : fcompute_(fcompute), attrs_(attrs) {
-    in_data_.resize(num_inputs);
-    out_data_.resize(num_outputs);
-    this->Reset(num_inputs, num_outputs);
-    // Setup input tblob pointers.
-    for (size_t i = 0; i < num_inputs; ++i) {
-      in_tblob_ptr_[i] = &in_data_[i];
-    }
-    // Setup output tblob pointers.
-    for (size_t i = 0; i < num_outputs; ++i) {
-      out_tblob_ptr_[i] = &out_data_[i];
-    }
-  }
-
-  static FCompute GetFCompute(const Op* op, Context ctx) {
-    static auto& fcompute_cpu = nnvm::Op::GetAttr<FCompute>("FCompute<cpu>");
-    static auto& fcompute_gpu = nnvm::Op::GetAttr<FCompute>("FCompute<gpu>");
-    if (ctx.dev_mask() == cpu::kDevMask) {
-      return fcompute_cpu.get(op, nullptr);
-    } else if (ctx.dev_mask() == gpu::kDevMask) {
-      return fcompute_gpu.get(op, nullptr);
-    } else {
-      LOG(FATAL) << "Unknown device mask";
-      return nullptr;
-    }
-  }
-
- private:
-  FCompute fcompute_;
-  NodeAttrs attrs_;
-  vector<TBlob> in_data_, out_data_;
-};
+}
 
 void AttachFunctorInfoRec(
     const Graph& g,
@@ -266,8 +100,7 @@ void AttachFunctorInfoRec(
                        infos->children[nid].CopyOnWrite());
     } else {
       auto& info = infos->value[nid];
-      FCompute fcompute = FComputeExecutorV2::GetFCompute(
-          node->op(), context.at(vdevice->value[nid]));
+      FCompute fcompute = GetFCompute(node->op(), context.at(vdevice->value[nid]));
       if (fcompute != nullptr) {
         info.type = FunctorType::kFCompute;
       } else if (fcreate_layer_op.count(node->op())) {
@@ -288,89 +121,6 @@ void AttachFunctorInfoRec(
         info.state = infos->value[fwd_nid].state;
       } else {
         // Do nothing.
-      }
-    }
-  }
-}
-
-void AttachOpExecsRec(
-    const Graph& g,
-    const Column<pass::plan_memory::StorageRef>* mem_plan,
-    const Column<int>* vdevice,
-    const Column<vector<uint32_t>>* mutate_index,
-    const Column<FunctorInfo>* infos,
-    const vector<Context>& context,
-    Column<shared_ptr<OpExecutorV2>>* execs) {
-  using pass::plan_memory::StorageRef;
-  using pass::plan_memory::kNull;
-  const auto& idx = g.indexed_graph();
-
-  for (size_t nid = 0; nid < idx.num_nodes(); ++nid) {
-    const Node* node = idx[nid].source;
-    if (execs->value[nid] != nullptr) {
-      continue;
-    }
-    if (node->is_variable()) {
-      continue;
-    }
-    if (node->is_graph()) {
-      // XXX(minjie): Always create new executors for subgraphs. This can be saved if
-      // (1) all executors in the subgraphs are stateless; (2) all the given arguments
-      // are the same. However, be aware of the cost of this check.
-      AttachOpExecsRec(*node->graph(),
-                       mem_plan->children[nid].get(),
-                       vdevice->children[nid].get(),
-                       mutate_index->children[nid].get(),
-                       infos->children[nid].get(),
-                       context,
-                       execs->children[nid].CopyOnWrite());
-    } else {
-      switch (infos->value[nid].type) {
-      case FunctorType::kFCompute:
-        {
-          FCompute fcompute = FComputeExecutorV2::GetFCompute(
-              node->op(), context.at(vdevice->value[nid]));
-          CHECK_NOTNULL(fcompute);
-          execs->value[nid] = std::make_shared<FComputeExecutorV2>(
-              fcompute, node->attrs, node->inputs.size(), node->num_outputs());
-          break;
-        }
-      case FunctorType::kForward:
-        {
-          execs->value[nid] = std::make_shared<ForwardOpExecutorV2>(
-              infos->value[nid].state,
-              mxnet::op::OpPropGetOpProperty(node->attrs),
-              mutate_index->value[nid]);
-          break;
-        }
-      case FunctorType::kBackward:
-        {
-          execs->value[nid] = std::make_shared<BackwardOpExecutorV2>(
-              infos->value[nid].state,
-              mxnet::op::OpPropGetOpProperty(node->attrs),
-              mutate_index->value[nid]);
-          break;
-        }
-      case FunctorType::kUndefined:
-        LOG(FATAL) << "No functor registered for operator \"" << node->op()->name << "\".";
-      }
-      // Setup output requests.
-      OpExecutorV2* exec = execs->value[nid].get();
-      for (size_t i = 0; i < node->num_outputs(); ++i) {
-        const uint32_t eid = idx.entry_id(nid, i);
-        const StorageRef& store_ref = mem_plan->value[eid];
-        const int storageid = mem_plan->value[eid].storage_id;
-        // Output request.
-        if (false) {
-          // TODO(minjie): addto inplace optimization.
-        } else if (store_ref.inplace_index >= 0) {
-          exec->req.push_back(kWriteInplace);
-        } else if (storageid == kNull) {
-          // TODO(minjie): need double-check.
-          exec->req.push_back(kNullOp);
-        } else {
-          exec->req.push_back(kWriteTo);
-        }
       }
     }
   }

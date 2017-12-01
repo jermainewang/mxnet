@@ -280,14 +280,7 @@ void AttachFunctorInfoRec(
     const std::vector<Context>& context,
     nnvm::Column<FunctorInfo>* infos);
 
-void AttachOpExecsRec(
-    const nnvm::Graph& g,
-    const nnvm::Column<pass::plan_memory::StorageRef>* mem_plan,
-    const nnvm::Column<int>* vdevice,
-    const nnvm::Column<std::vector<uint32_t>>* mutate_index,
-    const nnvm::Column<FunctorInfo>* infos,
-    const std::vector<Context>& context,
-    nnvm::Column<std::shared_ptr<OpExecutorV2>>* execs);
+FCompute GetFCompute(const Op* op, Context ctx);
 }  // namespace exec
 
 namespace op {

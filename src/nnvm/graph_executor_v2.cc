@@ -9,6 +9,10 @@ using namespace std;
 using namespace nnvm;
 
 namespace mxnet {
+namespace op {
+const OperatorProperty* OpPropGetOpProperty(const NodeAttrs& attrs);
+}  // namespace op
+
 namespace exec {
 
 using StorageRef = pass::plan_memory::StorageRef;
@@ -24,9 +28,175 @@ struct Closure {
   std::vector<NDArray> in_array, out_array;
   // Requested resources.
   std::vector<Resource> requested;
+  // Execution function of this operator.
+  std::shared_ptr<OpExecutorV2> op_exec;
   // Whether the closure needs to be recreated.
   bool dirty{true};
 };
+
+// forward executor
+class ForwardOpExecutorV2 : public OpExecutorV2 {
+ public:
+  void Run(const OpContext& op_ctx) const override {
+    auto* opr = state_.get_state<op::OperatorState>().opr();
+    opr->Forward(op_ctx, in_data_, req, out_data_, aux_data_);
+#if MKL_EXPERIMENTAL == 1
+    mkl_tblobs_prv_to_cpu(in_data_);
+    mkl_tblobs_prv_to_cpu(out_data_);
+    mkl_tblobs_prv_to_cpu(aux_data_);
+#endif
+  }
+  ExecType exec_type() const override {
+    auto* opr = state_.get_state<op::OperatorState>().opr();
+    return opr->exec_type();
+  }
+  OpStatePtr state() const {
+    return state_;
+  }
+  explicit ForwardOpExecutorV2(OpStatePtr state,
+                               const OperatorProperty* prop,
+                               vector<uint32_t> aux_index)
+      : state_(state) {
+    const size_t num_inputs = prop->ListArguments().size() + aux_index.size();
+    const size_t num_outputs = prop->NumOutputs();
+    this->Reset(num_inputs, num_outputs);
+    out_data_.resize(prop->NumOutputs());
+    in_data_.resize(prop->ListArguments().size());
+    aux_data_.resize(aux_index.size());
+    // Setup in tblob pointer.
+    std::sort(aux_index.begin(), aux_index.end());
+    size_t nml_top = 0, aux_top = 0;
+    for (size_t i = 0; i < num_inputs; ++i) {
+      if (!std::binary_search(aux_index.begin(), aux_index.end(), i)) {
+        CHECK_GT(in_data_.size(), nml_top);
+        in_tblob_ptr_[i] = &in_data_[nml_top++];
+      } else {
+        CHECK_GT(aux_data_.size(), aux_top);
+        in_tblob_ptr_[i] = &aux_data_[aux_top++];
+      }
+    }
+    // Setup out tblob pointer.
+    for (size_t i = 0; i < num_outputs; ++i) {
+      out_tblob_ptr_[i] = &out_data_[i];
+    }
+  }
+
+ private:
+  OpStatePtr state_;
+  vector<TBlob> in_data_, out_data_, aux_data_;
+};
+
+// backward executor
+class BackwardOpExecutorV2 : public OpExecutorV2 {
+ public:
+  void Run(const OpContext& op_ctx) const override {
+    auto* opr = state_.get_state<op::OperatorState>().opr();
+    opr->Backward(op_ctx, out_grad_, in_data_, out_data_,
+                  req, in_grad_, aux_data_);
+#if MKL_EXPERIMENTAL == 1
+    mkl_tblobs_prv_to_cpu(out_grad_);
+    mkl_tblobs_prv_to_cpu(in_data_);
+    mkl_tblobs_prv_to_cpu(out_data_);
+    mkl_tblobs_prv_to_cpu(in_grad_);
+    mkl_tblobs_prv_to_cpu(aux_data_);
+#endif
+  }
+  ExecType exec_type() const override {
+    auto* opr = state_.get_state<op::OperatorState>().opr();
+    return opr->exec_type();
+  }
+  explicit BackwardOpExecutorV2(OpStatePtr state,
+                                const OperatorProperty* prop,
+                                vector<uint32_t> aux_index)
+      : state_(state) {
+    out_grad_.resize(prop->NumVisibleOutputs());
+    in_data_.resize(prop->ListArguments().size());
+    in_grad_.resize(in_data_.size());
+    out_data_.resize(prop->NumOutputs());
+    aux_data_.resize(aux_index.size());
+    // Compute backward dependencies.
+    vector<TBlob*> out_grad_ptr(out_grad_.size());
+    for (size_t i = 0; i < out_grad_.size(); ++i) {
+      out_grad_ptr[i] = &out_grad_[i];
+    }
+    vector<TBlob*> in_data_ptr(in_data_.size());
+    for (size_t i = 0; i < in_data_.size(); ++i) {
+      in_data_ptr[i] = &in_data_[i];
+    }
+    vector<TBlob*> out_data_ptr(out_data_.size());
+    for (size_t i = 0; i < out_data_.size(); ++i) {
+      out_data_ptr[i] = &out_data_[i];
+    }
+    vector<TBlob*> bwd_in_ptr = prop->BackwardInputs(
+        out_grad_ptr, in_data_ptr, out_data_ptr);
+    const size_t num_inputs = bwd_in_ptr.size() + aux_index.size();
+    const size_t num_outputs = in_data_.size();
+    this->Reset(num_inputs, num_outputs);
+    // Setup input tblob pointers.
+    std::sort(aux_index.begin(), aux_index.end());
+    size_t nml_top = 0, aux_top = 0;
+    for (size_t i = 0; i < num_inputs; ++i) {
+      if (!std::binary_search(aux_index.begin(), aux_index.end(), i)) {
+        CHECK_GT(bwd_in_ptr.size(), nml_top);
+        in_tblob_ptr_[i] = bwd_in_ptr[nml_top++];
+      } else {
+        CHECK_GT(aux_data_.size(), aux_top);
+        in_tblob_ptr_[i] = &aux_data_[aux_top++];
+      }
+    }
+    // Setup output tblob pointers.
+    for (size_t i = 0; i < out_tblob_ptr_.size(); ++i) {
+      out_tblob_ptr_[i] = &in_grad_[i];
+    }
+  }
+
+ private:
+  OpStatePtr state_;
+  vector<TBlob> out_grad_, in_data_, out_data_, aux_data_;
+  vector<TBlob> in_grad_;
+};
+
+// fcompute executor executor
+class FComputeExecutorV2 : public OpExecutorV2 {
+ public:
+  void Run(const OpContext& op_ctx) const override {
+    fcompute_(attrs_, op_ctx, in_data_, req, out_data_);
+#if MKL_EXPERIMENTAL == 1
+    mkl_tblobs_prv_to_cpu(in_data_);
+    mkl_tblobs_prv_to_cpu(out_data_);
+#endif
+  }
+  ExecType exec_type() const override {
+    return ExecType::kSync;
+  }
+  OpStatePtr state() const {
+    return OpStatePtr();
+  }
+  explicit FComputeExecutorV2(FCompute fcompute,
+                              const NodeAttrs& attrs,
+                              size_t num_inputs,
+                              size_t num_outputs)
+      : fcompute_(fcompute), attrs_(attrs) {
+    in_data_.resize(num_inputs);
+    out_data_.resize(num_outputs);
+    this->Reset(num_inputs, num_outputs);
+    // Setup input tblob pointers.
+    for (size_t i = 0; i < num_inputs; ++i) {
+      in_tblob_ptr_[i] = &in_data_[i];
+    }
+    // Setup output tblob pointers.
+    for (size_t i = 0; i < num_outputs; ++i) {
+      out_tblob_ptr_[i] = &out_data_[i];
+    }
+  }
+
+ private:
+  FCompute fcompute_;
+  NodeAttrs attrs_;
+  vector<TBlob> in_data_, out_data_;
+};
+
+
 
 // Internal data structure used for creating
 // engine operators.
@@ -153,9 +323,9 @@ void SetupClosure(const Graph& graph,
 
 inline void EngineAsyncFn(
     const Closure& cl,
-    shared_ptr<OpExecutorV2> exec,
     RunContext ctx,
     Engine::CallbackOnComplete on_complete) {
+  auto exec = cl.op_exec;
   const bool is_async = exec->exec_type() == ExecType::kAsync;
   const bool is_gpu = cl.ctx.dev_mask() == gpu::kDevMask;
   OpContext op_ctx{cl.is_train, ctx, on_complete, cl.requested};
@@ -176,10 +346,10 @@ inline void EngineAsyncFn(
 }
 
 inline Engine::AsyncFn CreateEngineAsyncFn(
-    const Closure& cl, shared_ptr<OpExecutorV2> exec) {
+    const Closure& cl) {
   // Execution functor.
-  return [cl, exec] (RunContext ctx, Engine::CallbackOnComplete on_complete) {
-    EngineAsyncFn(cl, exec, ctx, on_complete);
+  return [cl] (RunContext ctx, Engine::CallbackOnComplete on_complete) {
+    EngineAsyncFn(cl, ctx, on_complete);
   };
 }
 
@@ -204,20 +374,24 @@ void CreateReadWriteVar(const Closure& cl,
 }
 
 inline Engine::OprHandle CreateCachedOpr(
-    const Closure& cl, shared_ptr<OpExecutorV2> exec) {
+    const Closure& cl) {
   // Setup variables
   vector<Engine::VarHandle> use_vars, mutate_vars;
   CreateReadWriteVar(cl, &use_vars, &mutate_vars);
   return Engine::Get()->NewOperator(
-      CreateEngineAsyncFn(cl, exec), use_vars, mutate_vars, FnProperty::kNormal,
+      CreateEngineAsyncFn(cl), use_vars, mutate_vars, FnProperty::kNormal,
       PROFILER_MESSAGE(closures_[nid].opr_name));
 }
 
 void AttachOpClosuresRec(const Graph& graph,
                          const Column<int>* vdevice,
                          const Column<StorageRef>* mem_plan,
+                         const Column<vector<uint32_t>>* mutate_index,
+                         const Column<FunctorInfo>* infos,
                          const vector<Context>& context,
                          Column<Closure>* closures) {
+  using pass::plan_memory::StorageRef;
+  using pass::plan_memory::kNull;
   const auto& idx = graph.indexed_graph();
   for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
     Closure& cl = closures->value[nid];
@@ -233,10 +407,57 @@ void AttachOpClosuresRec(const Graph& graph,
       AttachOpClosuresRec(*subgraph,
                           vdevice->children[nid].get(),
                           mem_plan->children[nid].get(),
+                          mutate_index->children[nid].get(),
+                          infos->children[nid].get(),
                           context,
                           closures->children[nid].CopyOnWrite());
     } else {
       cl.opr_name = node->op()->name;
+      switch (infos->value[nid].type) {
+      case FunctorType::kFCompute:
+        {
+          FCompute fcompute = GetFCompute(node->op(), context.at(vdevice->value[nid]));
+          CHECK_NOTNULL(fcompute);
+          cl.op_exec = std::make_shared<FComputeExecutorV2>(
+              fcompute, node->attrs, node->inputs.size(), node->num_outputs());
+          break;
+        }
+      case FunctorType::kForward:
+        {
+          cl.op_exec = std::make_shared<ForwardOpExecutorV2>(
+              infos->value[nid].state,
+              mxnet::op::OpPropGetOpProperty(node->attrs),
+              mutate_index->value[nid]);
+          break;
+        }
+      case FunctorType::kBackward:
+        {
+          cl.op_exec = std::make_shared<BackwardOpExecutorV2>(
+              infos->value[nid].state,
+              mxnet::op::OpPropGetOpProperty(node->attrs),
+              mutate_index->value[nid]);
+          break;
+        }
+      case FunctorType::kUndefined:
+        LOG(FATAL) << "No functor registered for operator \"" << node->op()->name << "\".";
+      }
+      // Setup output requests.
+      for (size_t i = 0; i < node->num_outputs(); ++i) {
+        const uint32_t eid = idx.entry_id(nid, i);
+        const StorageRef& store_ref = mem_plan->value[eid];
+        const int storageid = mem_plan->value[eid].storage_id;
+        // Output request.
+        if (false) {
+          // TODO(minjie): addto inplace optimization.
+        } else if (store_ref.inplace_index >= 0) {
+          cl.op_exec->req.push_back(kWriteInplace);
+        } else if (storageid == kNull) {
+          // TODO(minjie): need double-check.
+          cl.op_exec->req.push_back(kNullOp);
+        } else {
+          cl.op_exec->req.push_back(kWriteTo);
+        }
+      }
     }
     cl.in_array.resize(node->inputs.size());
     cl.out_array.resize(node->num_outputs());
@@ -312,7 +533,6 @@ void ResetClosure(const Node* node, Closure* cl) {
 void ExecBulkRec(const Graph& graph,
                  const GraphExecutorV2::Config& cfg,
                  OpContext op_ctx,
-                 Column<shared_ptr<OpExecutorV2>>* op_execs,
                  Column<Closure>* closures) {
   const auto& idx = graph.indexed_graph();
   for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
@@ -323,11 +543,10 @@ void ExecBulkRec(const Graph& graph,
       ExecBulkRec(*node->graph(),
                   cfg,
                   op_ctx,
-                  op_execs->children[nid].CopyOnWrite(),
                   closures->children[nid].CopyOnWrite());
     } else {
       Closure& cl = closures->value[nid];
-      auto exec = op_execs->value[nid];
+      auto exec = cl.op_exec;
       exec->Setup(cl.in_array, cl.out_array);
       op_ctx.requested = cl.requested;
       exec->Run(op_ctx);
@@ -368,8 +587,8 @@ void GraphExecutorV2::CheckAllowBulkExec() const {
       CHECK_EQ(vdevice->value[nid], vdevice->value[0])
         << "Bulk execution is NOT allowed when some nodes in the graph are"
         << " assigned to different devices.";
-      CHECK(op_execs_->value[nid]->exec_type() != ExecType::kCrossDeviceCopy
-          && op_execs_->value[nid]->exec_type() != ExecType::kAsync)
+      CHECK(closures_->value[nid].op_exec->exec_type() != ExecType::kCrossDeviceCopy
+          && closures_->value[nid].op_exec->exec_type() != ExecType::kAsync)
         << "Bulk execution is NOT allowed when some nodes in the graph are"
         << " asynchronous.";
     }
@@ -392,18 +611,12 @@ void GraphExecutorV2::AttachOps() {
                        fwd_states_.get(),
                        context,
                        states_.CopyOnWrite());
-  op_execs_ = CreateNodeColumn<shared_ptr<OpExecutorV2>>(*graph_ptr_);
-  AttachOpExecsRec(*graph_ptr_,
-                   mem_plan,
-                   vdevice,
-                   mutate,
-                   states_.get(),
-                   context,
-                   op_execs_.CopyOnWrite());
   closures_ = CreateNodeColumn<Closure>(*graph_ptr_);
   AttachOpClosuresRec(*graph_ptr_,
                       vdevice,
                       mem_plan,
+                      mutate,
+                      states_.get(),
                       context,
                       closures_.CopyOnWrite());
 }
@@ -478,14 +691,13 @@ void GraphExecutorV2::RunOps() {
       LOG(FATAL) << "Not implemented.";
     } else {
       Closure& cl = closures_.CopyOnWrite()->value[nid];
-      auto exec = op_execs_.CopyOnWrite()->value[nid];
-      if (exec->exec_type() == ExecType::kCrossDeviceCopy) {
+      if (cl.op_exec->exec_type() == ExecType::kCrossDeviceCopy) {
         CHECK_EQ(node->inputs.size(), 1U);
         CHECK_EQ(cl.in_array.size(), 1U);
         CHECK_EQ(cl.out_array.size(), 1U);
         CopyFromTo(cl.in_array[0], &(cl.out_array[0]));
       } else {
-        Engine::AsyncFn fn = CreateEngineAsyncFn(cl, exec);
+        Engine::AsyncFn fn = CreateEngineAsyncFn(cl);
         CreateReadWriteVar(cl, &use_vars, &mutate_vars);
         Engine::Get()->PushAsync(fn, cl.ctx, use_vars, mutate_vars, FnProperty::kNormal, 0,
             PROFILER_MESSAGE(cl.opr_name));
@@ -537,13 +749,11 @@ void GraphExecutorV2::RunOpsInBulk(const vector<NDArray>& arguments,
   const Config& cfg = config_;
   // Note: use move to clear the reference of the closures and op_execs.
   ColumnRef<Closure> closures = std::move(closures_);
-  auto op_execs = std::move(op_execs_);
-  auto fn = [graph, op_execs, closures, cfg, is_gpu, is_train] 
+  auto fn = [graph, closures, cfg, is_gpu, is_train] 
     (RunContext ctx, Engine::CallbackOnComplete on_complete) mutable {
     const auto& idx = graph->indexed_graph();
     OpContext op_ctx{is_train, ctx, on_complete, {}};
     ExecBulkRec(*graph, cfg, op_ctx,
-                op_execs.CopyOnWrite(),
                 closures.CopyOnWrite());
     if (is_gpu) {
 #if MXNET_USE_CUDA
