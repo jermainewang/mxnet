@@ -109,6 +109,7 @@ void SetupClosure(const Graph& graph,
     const int storageid = mem_plan->value[eid].storage_id;
     if (external_pool.count(eid)) {  // Check external pool first.
       cl->out_array[i] = external_pool.at(eid);
+      LOG(FATAL) << "Deal with external output entries whose req_type is inplace.";
       //const auto& array = cl->out_array[i];
       //CHECK_EQ(shapes->value[eid], array.shape())
         //<< "Shape mismatch: expect " << shapes->value[eid]
@@ -307,6 +308,35 @@ void ResetClosure(const Node* node, Closure* cl) {
   cl->requested.clear();  // TODO(minjie): how to reclaim the requested resources?
   cl->dirty = true;
 }
+
+void ExecBulkRec(const Graph& graph,
+                 const GraphExecutorV2::Config& cfg,
+                 OpContext op_ctx,
+                 Column<shared_ptr<OpExecutorV2>>* op_execs,
+                 Column<Closure>* closures) {
+  const auto& idx = graph.indexed_graph();
+  for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
+    const Node* node = idx[nid].source;
+    if (node->is_variable()) {
+      continue;
+    } else if (node->is_graph()) {
+      ExecBulkRec(*node->graph(),
+                  cfg,
+                  op_ctx,
+                  op_execs->children[nid].CopyOnWrite(),
+                  closures->children[nid].CopyOnWrite());
+    } else {
+      Closure& cl = closures->value[nid];
+      auto exec = op_execs->value[nid];
+      exec->Setup(cl.in_array, cl.out_array);
+      op_ctx.requested = cl.requested;
+      exec->Run(op_ctx);
+      if (cfg.dynamic_allocation) {
+        ResetClosure(node, &cl);
+      }
+    }
+  }
+}
 }  // namespace
 
 GraphExecutorV2::GraphExecutorV2(nnvm::GraphPtr graph,
@@ -501,16 +531,6 @@ void GraphExecutorV2::RunOpsInBulk(const vector<NDArray>& arguments,
   for (const auto& nd : results) {
     mutate_vars.push_back(nd.var());
   }
-  //for (const auto& op_inent : arg_to_op_input_) {
-    //const uint32_t nid = op_inent[0].first;
-    //const size_t index = op_inent[0].second;
-    //const NDArray& nd = closures_->value[nid].in_array[index];
-    //use_vars.push_back(nd.var());
-  //}
-  //for (const auto& ent : idx.outputs()) {
-    //const NDArray& nd = closures_->value[ent.node_id].out_array[ent.index];
-    //mutate_vars.push_back(nd.var());
-  //}
   Engine::Get()->DeduplicateVarHandle(&use_vars, &mutate_vars);
   // TODO(minjie): how about temporary resources?
   shared_ptr<const Graph> graph = graph_ptr_;
@@ -522,24 +542,9 @@ void GraphExecutorV2::RunOpsInBulk(const vector<NDArray>& arguments,
     (RunContext ctx, Engine::CallbackOnComplete on_complete) mutable {
     const auto& idx = graph->indexed_graph();
     OpContext op_ctx{is_train, ctx, on_complete, {}};
-    for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
-      const Node* node = idx[nid].source;
-      if (node->is_variable()) {
-        continue;
-      } else if (node->is_graph()) {
-        // TODO(minjie): subgraph node.
-        LOG(FATAL) << "Not implemented.";
-      } else {
-        Closure& cl = closures.CopyOnWrite()->value[nid];
-        auto exec = op_execs.CopyOnWrite()->value[nid];
-        exec->Setup(cl.in_array, cl.out_array);
-        op_ctx.requested = cl.requested;
-        exec->Run(op_ctx);
-        if (cfg.dynamic_allocation) {
-          ResetClosure(node, &cl);
-        }
-      }
-    }
+    ExecBulkRec(*graph, cfg, op_ctx,
+                op_execs.CopyOnWrite(),
+                closures.CopyOnWrite());
     if (is_gpu) {
 #if MXNET_USE_CUDA
       // Wait GPU kernel to finish.
