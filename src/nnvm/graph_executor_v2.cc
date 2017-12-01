@@ -196,10 +196,6 @@ class FComputeExecutorV2 : public OpExecutorV2 {
   vector<TBlob> in_data_, out_data_;
 };
 
-
-
-// Internal data structure used for creating
-// engine operators.
 namespace {
 vector<string> _InitRequiredGraphAttrs() {
   using namespace pass;
@@ -279,7 +275,11 @@ void SetupClosure(const Graph& graph,
     const int storageid = mem_plan->value[eid].storage_id;
     if (external_pool.count(eid)) {  // Check external pool first.
       cl->out_array[i] = external_pool.at(eid);
-      LOG(FATAL) << "Deal with external output entries whose req_type is inplace.";
+      if (cl->op_exec->req[i] == kWriteInplace) {
+        // Inplace write is not available is the output buffer
+        // is provided externally.
+        cl->op_exec->req[i] = kWriteTo;
+      }
       //const auto& array = cl->out_array[i];
       //CHECK_EQ(shapes->value[eid], array.shape())
         //<< "Shape mismatch: expect " << shapes->value[eid]
