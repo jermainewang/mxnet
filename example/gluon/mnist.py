@@ -20,6 +20,7 @@ from __future__ import print_function
 
 import argparse
 import logging
+import time
 logging.basicConfig(level=logging.DEBUG)
 
 import numpy as np
@@ -89,6 +90,7 @@ def train(epochs, ctx):
     metric = mx.metric.Accuracy()
     loss = gluon.loss.SoftmaxCrossEntropyLoss()
 
+    t0 = time.time()
     for epoch in range(epochs):
         # reset data iterator and metric at begining of epoch.
         metric.reset()
@@ -109,7 +111,9 @@ def train(epochs, ctx):
 
             if i % opt.log_interval == 0 and i > 0:
                 name, acc = metric.get()
-                print('[Epoch %d Batch %d] Training: %s=%f'%(epoch, i, name, acc))
+                print('[Epoch %d Batch %d] Training: %s=%f Time/Batch: %f(s)' \
+                    % (epoch, i, name, acc, ((time.time() - t0) / opt.log_interval)))
+                t0 = time.time()
 
         name, acc = metric.get()
         print('[Epoch %d] Training: %s=%f'%(epoch, name, acc))

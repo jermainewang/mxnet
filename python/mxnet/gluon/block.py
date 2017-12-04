@@ -449,12 +449,12 @@ class HybridBlock(Block):
         return _regroup(out, self._out_format)[0]
 
     def _call_cached_op(self, *args):
-        return self._call_cached_op_old(*args)
-        #return self._call_cached_op_new(*args)
+        #return self._call_cached_op_old(*args)
+        return self._call_cached_op_new(*args)
 
     def _build_cache(self, *args):
-        self._build_cache_old(*args)
-        #self._build_cache_new(*args)
+        #self._build_cache_old(*args)
+        self._build_cache_new(*args)
 
     def _clear_cached_op(self):
         self._cached_graph = ()

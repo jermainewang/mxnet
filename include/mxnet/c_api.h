@@ -700,6 +700,8 @@ MXNET_DLL int MXImperativeInvokeEx(AtomicSymbolCreator creator,
  * \return 0 when success, -1 when failure happens
  */
 MXNET_DLL int MXAutogradSetIsRecording(int is_recording, int* prev);
+MXNET_DLL int MXAutogradNewSession();
+MXNET_DLL int MXAutogradEndSession();
 /*!
  * \brief set whether to record operator for autograd
  * \param is_training 1 when training, 0 when testing

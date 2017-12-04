@@ -339,15 +339,23 @@ int MXAutogradIsRecording(bool* curr) {
 
 int MXAutogradSetIsRecording(int is_recording, int* prev) {
   API_BEGIN();
-#ifndef USE_LEGACY_AUTOGRAD
-  if (Imperative::Get()->is_recording() && is_recording == false) {
-    // Turning off previous recording tape.
-    ag::AutogradTape::Get().EndSession();
-  } else if (!Imperative::Get()->is_recording() && is_recording == true) {
-    ag::AutogradTape::Get().NewSession();
-  }
-#endif
   *prev = Imperative::Get()->set_is_recording(static_cast<bool>(is_recording));
+  API_END();
+}
+
+int MXAutogradNewSession() {
+  API_BEGIN();
+#ifndef USE_LEGACY_AUTOGRAD
+  ag::AutogradTape::Get().NewSession();
+#endif
+  API_END();
+}
+
+int MXAutogradEndSession() {
+  API_BEGIN();
+#ifndef USE_LEGACY_AUTOGRAD
+  ag::AutogradTape::Get().EndSession();
+#endif
   API_END();
 }
 

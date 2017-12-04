@@ -5,7 +5,7 @@
 #include "./taping.h"
 #include "../nnvm/mx_passes.h"
 
-#define USE_LEGACY_AUTOGRAD
+//#define USE_LEGACY_AUTOGRAD
 
 namespace mxnet {
 namespace ag {
@@ -43,6 +43,8 @@ class AutogradTape {
   std::vector<tape::TapeEntryId> GetGradAttachedTapeEntryIds() const {
     return grad_attached_entries_;
   }
+
+  bool HasTaped(tape::TapeEntryId teid) const;
 
   void NewSession();
 

@@ -173,17 +173,24 @@ NDArray NDArray::data_ndarray() const {
 }
 
 bool NDArray::fresh_out_grad() const {
+#ifdef USE_LEGACY_AUTOGRAD
   if (Imperative::AGInfo::IsNone(*this)) return false;
   Imperative::AGInfo& info = Imperative::AGInfo::Get(entry_.node);
   return info.fresh_out_grad;
+#else
+  return ag::AutogradTape::Get().HasTaped(tape_entry_id_);
+#endif
 }
 
 
 void NDArray::set_fresh_out_grad(bool state) const {
+#ifdef USE_LEGACY_AUTOGRAD
   CHECK(!Imperative::AGInfo::IsNone(*this))
     << "NDArray has not been marked as a variable and does not have gradient state";
   Imperative::AGInfo& info = Imperative::AGInfo::Get(entry_.node);
   info.fresh_out_grad = state;
+#else
+#endif
 }
 
 

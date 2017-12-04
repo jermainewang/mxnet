@@ -47,6 +47,7 @@ uint32_t AutogradTape::Record(
   CHECK(tape.enabled());
   const uint32_t pos = tape.Record(attrs, ndinputs, ndoutputs);
   const auto& node = tape[pos].node;
+  //LOG(INFO) << "Recorded: " << (node->is_variable()? "var" : node->op()->name);
   // Compute values to be saved.
   vector<bool> save_inputs, save_outputs;
   static auto& fbwddep_map = Op::GetAttr<FBackwardDependency>("FBackwardDependency");
@@ -69,6 +70,8 @@ uint32_t AutogradTape::Record(
   CHECK_EQ(save_inputs.size(), ndinputs.size());
   CHECK_EQ(save_outputs.size(), ndoutputs.size());
   for (size_t i = 0; i < ndinputs.size(); ++i) {
+    if (ndinputs[i]->HasGradAttached()) {
+    }
     SaveInfo(ndinputs[i], save_inputs[i]);
   }
   for (size_t i = 0; i < ndoutputs.size(); ++i) {
@@ -119,6 +122,11 @@ void AutogradTape::EndSession() {
     saved_graph_states_.resize(saved_states_.size());
   }
   tape::Tape::Get(tape::kGradTape).EndSession();
+}
+
+bool AutogradTape::HasTaped(tape::TapeEntryId teid) const {
+  const tape::Tape& grad_tape = tape::Tape::Get(tape::kGradTape);
+  return grad_tape.HasTaped(teid);
 }
 
 void AutogradTape::AttachGrad(tape::TapeEntryId teid,
@@ -242,13 +250,13 @@ GraphPtr AutogradTape::GetSpecializedBackwardGraph(
   GraphPtr bwd_graph = fwd_graph.GetGlobalAttr<GraphPtr>("gradient_graph");
   const auto& fwd_graph_idx = fwd_graph.indexed_graph();
   const auto& bwd_graph_idx = bwd_graph->indexed_graph();
-  //LOG(INFO) << "#Fwd nodes: " << fwd_graph_idx.num_nodes();
-  //LOG(INFO) << "#Bwd nodes: " << bwd_graph_idx.num_nodes();
-  //LOG(INFO) << "#Fwd outputs: " << fwd_graph.outputs.size();
-  //LOG(INFO) << "#Bwd outputs: " << bwd_graph->outputs.size();
-  //LOG(INFO) << "#Bwd inputs: " << bwd_graph_idx.input_nodes().size();
-  //LOG(INFO) << "#Fwd visible outputs: " << fwd_graph.GetGlobalAttr<size_t>("num_visible_outputs");
-  /*for (uint32_t nid = 0; nid < bwd_graph_idx.num_nodes(); ++nid) {
+  /*LOG(INFO) << "#Fwd nodes: " << fwd_graph_idx.num_nodes();
+  LOG(INFO) << "#Bwd nodes: " << bwd_graph_idx.num_nodes();
+  LOG(INFO) << "#Fwd outputs: " << fwd_graph.outputs.size();
+  LOG(INFO) << "#Bwd outputs: " << bwd_graph->outputs.size();
+  LOG(INFO) << "#Bwd inputs: " << bwd_graph_idx.input_nodes().size();
+  LOG(INFO) << "#Fwd visible outputs: " << fwd_graph.GetGlobalAttr<size_t>("num_visible_outputs");
+  for (uint32_t nid = 0; nid < bwd_graph_idx.num_nodes(); ++nid) {
     const auto* node = bwd_graph_idx[nid].source;
     LOG(INFO) << "#" << nid << " " << node->attrs.name << " " << (node->is_variable()? "var" : node->op()->name);
     for (const auto& in : node->inputs) {

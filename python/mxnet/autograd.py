@@ -48,6 +48,12 @@ def set_recording(is_recording): #pylint: disable=redefined-outer-name
         ctypes.c_int(is_recording), ctypes.byref(prev)))
     return bool(prev.value)
 
+def new_session():
+    check_call(_LIB.MXAutogradNewSession())
+
+def end_session():
+    check_call(_LIB.MXAutogradEndSession())
+
 def set_training(train_mode): #pylint: disable=redefined-outer-name
     """Set status to training/predicting. This affects ctx.is_train in operator
     running context. For example, Dropout will drop inputs randomly when
@@ -99,19 +105,24 @@ class _RecordingStateScope(object):
             backward([y])
 
     """
-    def __init__(self, is_record, train_mode): #pylint: disable=redefined-outer-name
+    def __init__(self, is_record, train_mode, new_session=False): #pylint: disable=redefined-outer-name
         self._enter_is_record = is_record
         self._enter_train_mode = train_mode
         self._prev_is_record = None
         self._prev_train_mode = None
+        self._new_session = new_session
 
     def __enter__(self):
         if self._enter_is_record is not None:
             self._prev_is_record = set_recording(self._enter_is_record)
         if self._enter_train_mode is not None:
             self._prev_train_mode = set_training(self._enter_train_mode)
+        if self._new_session:
+            new_session()
 
     def __exit__(self, ptype, value, trace):
+        if self._new_session:
+            end_session()
         if self._enter_is_record is not None and self._prev_is_record != self._enter_is_record:
             set_recording(self._prev_is_record)
         if self._enter_train_mode is not None and self._prev_train_mode != self._enter_train_mode:
@@ -139,7 +150,7 @@ def record(train_mode=True): #pylint: disable=redefined-outer-name
         Whether the forward pass is in training or predicting mode. This controls the behavior
         of some layers such as Dropout, BatchNorm.
     """
-    return _RecordingStateScope(True, train_mode)
+    return _RecordingStateScope(True, train_mode, new_session=True)
 
 
 def pause(train_mode=False): #pylint: disable=redefined-outer-name
