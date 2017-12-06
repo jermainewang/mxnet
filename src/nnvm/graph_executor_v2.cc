@@ -737,6 +737,13 @@ void GraphExecutorV2::RunOpsInBulk(const vector<NDArray>& arguments,
   const Context& bulkctx = closures_->value[first_non_var_nid].ctx;
   const bool is_train = closures_->value[first_non_var_nid].is_train;
   const bool is_gpu = bulkctx.dev_mask() == gpu::kDevMask;
+  // The use vars include:
+  //   - Variables from the arguments.
+  //
+  // The mutate vars include:
+  //   - Variables from the result arrays.
+  //   - Temporary resources requested by each operator.
+  //   - State variables used by each operator.
   std::vector<Engine::VarHandle> use_vars, mutate_vars;
   for (const auto& nd : arguments) {
     use_vars.push_back(nd.var());
@@ -744,13 +751,22 @@ void GraphExecutorV2::RunOpsInBulk(const vector<NDArray>& arguments,
   for (const auto& nd : results) {
     mutate_vars.push_back(nd.var());
   }
+  for (uint32_t nid = 0; nid < idx.num_nodes(); ++nid) {
+    const auto& cl = closures_->value[nid];
+    for (const auto& r : cl.requested) {
+      mutate_vars.push_back(r.var);
+    }
+    const auto& st = states_->value[nid];
+    if (st.state) {
+      mutate_vars.push_back(st.state.get_var());
+    }
+  }
   Engine::Get()->DeduplicateVarHandle(&use_vars, &mutate_vars);
-  // TODO(minjie): how about temporary resources?
   shared_ptr<const Graph> graph = graph_ptr_;
   const Config& cfg = config_;
   // Note: use move to clear the reference of the closures and op_execs.
   ColumnRef<Closure> closures = std::move(closures_);
-  auto fn = [graph, closures, cfg, is_gpu, is_train] 
+  auto fn = [graph, closures, cfg, is_gpu, is_train]
     (RunContext ctx, Engine::CallbackOnComplete on_complete) mutable {
     const auto& idx = graph->indexed_graph();
     OpContext op_ctx{is_train, ctx, on_complete, {}};
