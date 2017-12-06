@@ -29,6 +29,7 @@
 
 #include "./c_api_common.h"
 #include "../operator/operator_common.h"
+#include "../imperative/autograd.h"
 
 namespace mxnet {
 namespace custom_function {
@@ -208,8 +209,24 @@ int MXCustomFunctionRecord(int num_inputs, NDArrayHandle *inputs,
   nnvm::NodeAttrs attrs;
   attrs.op = nnvm::Op::Get("_CustomFunction");
   attrs.parsed = params;
-  Imperative::Get()->RecordOp(
-      std::move(attrs), ndinputs, ndoutputs, state);
+
+#ifdef USE_LEGACY_AUTOGRAD
+  if (Imperative::Get()->is_recording()) {
+    Imperative::Get()->RecordOp(std::move(attrs), ndinputs, ndoutputs, state);
+  }
+#else
+  if (Imperative::Get()->is_recording()) {
+    // TODO(minjie): The functor type should be set in a more accurate way.
+    exec::FunctorInfo info;
+    if (state) {
+      info.type = exec::FunctorType::kForward;
+    } else {
+      info.type = exec::FunctorType::kFCompute;
+    }
+    info.state = state;
+    ag::AutogradTape::Get().Record(attrs, ndinputs, ndoutputs, std::move(info));
+  }
+#endif
 
   API_END();
 }

@@ -2,7 +2,7 @@ import mxnet as mx
 import mxnet.ndarray as nd
 import mxnet.autograd as ag
 
-ctx = mx.cpu(0)
+ctx = mx.gpu(0)
 
 def PP(arr):
     if arr is None:
@@ -70,5 +70,5 @@ def test3():
 
 #test()
 #test1()
-test2()
+#test2()
 #test3()

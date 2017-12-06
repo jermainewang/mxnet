@@ -25,7 +25,6 @@ void AutogradTape::SaveInfo(const NDArray* nd, bool save_value) {
   if (!aginfo.saved) {
     aginfo.shape = nd->shape();
     aginfo.dtype = nd->dtype();
-    
     if (nd->HasGradAttached()) {
       tie(aginfo.req_type, aginfo.grad_buffer) = nd->GetAttachedGrad();
       grad_attached_entries_.push_back(nd->tape_entry_id());
@@ -70,8 +69,6 @@ uint32_t AutogradTape::Record(
   CHECK_EQ(save_inputs.size(), ndinputs.size());
   CHECK_EQ(save_outputs.size(), ndoutputs.size());
   for (size_t i = 0; i < ndinputs.size(); ++i) {
-    if (ndinputs[i]->HasGradAttached()) {
-    }
     SaveInfo(ndinputs[i], save_inputs[i]);
   }
   for (size_t i = 0; i < ndoutputs.size(); ++i) {
@@ -109,19 +106,14 @@ uint32_t AutogradTape::Record(
 
 void AutogradTape::NewSession() {
   tape::Tape::Get(tape::kGradTape).NewSession();
+}
+
+void AutogradTape::EndSession() {
+  tape::Tape::Get(tape::kGradTape).EndSession();
   grad_attached_entries_.clear();
   saved_info_.clear();
   saved_states_.clear();
   saved_graph_states_.clear();
-}
-
-void AutogradTape::EndSession() {
-  if (saved_states_.size() < saved_graph_states_.size()) {
-    saved_states_.resize(saved_graph_states_.size());
-  } else if (saved_graph_states_.size() < saved_states_.size()) {
-    saved_graph_states_.resize(saved_states_.size());
-  }
-  tape::Tape::Get(tape::kGradTape).EndSession();
 }
 
 bool AutogradTape::HasTaped(tape::TapeEntryId teid) const {
@@ -144,6 +136,7 @@ void AutogradTape::AttachGrad(tape::TapeEntryId teid,
 }
 
 vector<NodeEntry> AutogradTape::GetGradTargets(
+    Graph graph,
     const vector<const NDArray*>& xs) const {
   vector<NodeEntry> xs_entries;
   tape::Tape& tape = tape::Tape::Get(tape::kGradTape);
@@ -164,11 +157,13 @@ vector<NodeEntry> AutogradTape::GetGradTargets(
     // Compute gradients for all grad-attached variables.
     // Note: Other grad-attached entries will not become graph outputs.
     //   Their gradient values will be stored in the provided buffers.
+    const auto& idx = graph.indexed_graph();
     for (auto teid : grad_attached_entries_) {
       std::tie(tapeid, pos, index, sid) = tape::ParseTapeEntryId(teid);
       CHECK_EQ(tapeid, tape::kGradTape);
       CHECK_EQ(sid, tape.session_id());
-      if (saved_info_[pos][index].req_type != kNullOp) {
+      if (idx.exist(tape[pos].node.get())
+          && saved_info_[pos][index].req_type != kNullOp) {
         xs_entries.emplace_back(NodeEntry{tape[pos].node, index, 0});
       }
     }
@@ -181,11 +176,11 @@ Graph AutogradTape::SpecializeForwardGraph(
     const vector<NodeEntry>& xs_entries) {
   using pass::grad::MXGradientArgs;
   using pass::MXEntryArg;
-
   tape::Tape& grad_tape = tape::Tape::Get(tape::kGradTape);
+  // Transform #1: expose invisible outputs.
   unordered_map<string, shared_ptr<any>> kwargs_any;
   graph = nnvm::Transform(graph, {"MXExposeInvisibleOutputs"}, kwargs_any);
-
+  // Transform #2: gradient.
   uint32_t tapeid = 0, pos = 0, index = 0, sid = 0;
   const auto& idx = graph.indexed_graph();
   MXGradientArgs args;
@@ -194,11 +189,20 @@ Graph AutogradTape::SpecializeForwardGraph(
     MXEntryArg entarg;
     entarg.node = nid;
     entarg.index = index;
+    //LOG(INFO) << "Compute grad for: " << ent.node->attrs.name << "#" << ent.index;
     args.xs.emplace_back(std::move(entarg));
   }
-
+  CHECK(!args.xs.empty());
   kwargs_any["mx_gradient_args"] = std::make_shared<any>(std::move(args));
   graph = nnvm::Transform(graph, {"MXGradient"}, kwargs_any);
+
+  // Saved information.
+  if (saved_states_.size() < saved_graph_states_.size()) {
+    saved_states_.resize(saved_graph_states_.size());
+  } else if (saved_graph_states_.size() < saved_states_.size()) {
+    saved_graph_states_.resize(saved_states_.size());
+  }
+
   const auto& graph_idx = graph.indexed_graph();
   // Create column attributes for the forward graph.
   auto* shapes = graph.CreateOrWriteEntryColumn<TShape>(pass::shape::key);
@@ -229,9 +233,6 @@ Graph AutogradTape::SpecializeForwardGraph(
       states->value[nid] = saved_states_[pos];
     }
   }
-  saved_info_.clear();
-  saved_states_.clear();
-  saved_graph_states_.clear();
   return graph;
 }
 
@@ -245,8 +246,9 @@ GraphPtr AutogradTape::GetSpecializedBackwardGraph(
   using pass::dtype::MXInferTypeArgs;
   using pass::plan_memory::MXPlanMemoryArgs;
   tape::Tape& grad_tape = tape::Tape::Get(tape::kGradTape);
-  const auto& xs_entries = GetGradTargets(xs);
-  Graph fwd_graph = SpecializeForwardGraph(grad_tape.GetGraph(ys), xs_entries);
+  Graph compute_graph = grad_tape.GetGraph(ys);
+  const auto& xs_entries = GetGradTargets(compute_graph, xs);
+  Graph fwd_graph = SpecializeForwardGraph(compute_graph, xs_entries);
   GraphPtr bwd_graph = fwd_graph.GetGlobalAttr<GraphPtr>("gradient_graph");
   const auto& fwd_graph_idx = fwd_graph.indexed_graph();
   const auto& bwd_graph_idx = bwd_graph->indexed_graph();

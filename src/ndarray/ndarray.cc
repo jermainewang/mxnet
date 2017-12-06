@@ -61,6 +61,20 @@ NDArray NDArray::grad() const {
 #endif
 }
 
+NDArray NDArray::Detach() const {
+#ifdef USE_LEGACY_AUTOGRAD
+  NDArray ret(*this);
+  ret.entry_ = nnvm::NodeEntry{nullptr, 0, 0};
+  return ret;
+#else
+  NDArray ret(*this);
+  ret.tape_entry_id_ = tape::kNotTaped;
+  ret.grad_req_type_ = kNullOp;
+  ret.grad_buffer_ = nullptr;
+  return ret;
+#endif
+}
+
 nnvm::Symbol NDArray::get_autograd_symbol() const {
   CHECK(!Imperative::AGInfo::IsNone(*this))
     << "NDArray is not part of a computation graph. Did you forget to turn on recording?";
@@ -96,7 +110,13 @@ NDArray NDArray::ReshapeWithRecord(const TShape &shape) {
   attrs.dict.insert({"shape", os.str()});
   attrs.op->attr_parser(&attrs);
   std::vector<NDArray*> inputs(1, this), outputs(1, &ret);
+#ifdef USE_LEGACY_AUTOGRAD
   Imperative::Get()->RecordOp(std::move(attrs), inputs, outputs);
+#else
+  exec::FunctorInfo info;
+  info.type = exec::FunctorType::kFCompute;
+  ag::AutogradTape::Get().Record(std::move(attrs), inputs, outputs, std::move(info));
+#endif
   return ret;
 }
 
@@ -127,7 +147,13 @@ NDArray NDArray::SliceWithRecord(index_t begin, index_t end) {
   attrs.dict.insert({"end", std::to_string(end)});
   attrs.op->attr_parser(&attrs);
   std::vector<NDArray*> inputs(1, this), outputs(1, &ret);
+#ifdef USE_LEGACY_AUTOGRAD
   Imperative::Get()->RecordOp(std::move(attrs), inputs, outputs);
+#else
+  exec::FunctorInfo info;
+  info.type = exec::FunctorType::kFCompute;
+  ag::AutogradTape::Get().Record(std::move(attrs), inputs, outputs, std::move(info));
+#endif
   return ret;
 }
 

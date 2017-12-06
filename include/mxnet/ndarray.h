@@ -528,13 +528,8 @@ class NDArray {
   /*!
    * \brief Return a copy of this NDArray without autograd history
    */
-  NDArray Detach() const {
-    NDArray ret(*this);
-    ret.entry_ = nnvm::NodeEntry{nullptr, 0, 0};
-    ret.grad_req_type_ = kNullOp;
-    ret.grad_buffer_ = nullptr;
-    return ret;
-  }
+  NDArray Detach() const;
+
   void AttachGrad(OpReqType req_type, const NDArray& grad_buf);
   bool HasGradAttached() const { return grad_req_type_ != kNullOp; }
   std::pair<OpReqType, NDArray> GetAttachedGrad() const;
@@ -884,11 +879,13 @@ class NDArray {
   /*! \brief node entry for autograd */
   nnvm::NodeEntry entry_;
 
+#ifndef USE_LEGACY_AUTOGRAD
   /*! \brief Unique id of this NDArray on the tape. Default value means not taped at all.*/
   tape::TapeEntryId tape_entry_id_ = tape::kNotTaped;
   // Used by attach_grad
   OpReqType grad_req_type_ = kNullOp;
   std::shared_ptr<Chunk> grad_buffer_{nullptr};
+#endif
 
   /*!
    * \brief internal TBlob

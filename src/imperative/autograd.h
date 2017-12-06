@@ -58,6 +58,7 @@ class AutogradTape {
                   const std::vector<NDArray*>& ndoutputs);
 
   std::vector<nnvm::NodeEntry> GetGradTargets(
+      nnvm::Graph graph,
       const std::vector<const NDArray*>& xs) const;
 
   nnvm::Graph SpecializeForwardGraph(

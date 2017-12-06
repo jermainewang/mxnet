@@ -167,7 +167,7 @@ void MXImperativeInvokeImpl(AtomicSymbolCreator creator,
       info.type = exec::FunctorType::kFCompute;
     }
     info.state = state;
-    ag::AutogradTape::Get().Record(attrs, ndinputs, ndoutputs, info);
+    ag::AutogradTape::Get().Record(attrs, ndinputs, ndoutputs, std::move(info));
   }
 #endif
 
@@ -456,7 +456,6 @@ int MXAutogradBackwardEx(mx_uint num_output,
   }
 #else
   auto& autograd = ag::AutogradTape::Get();
-  autograd.EndSession();
   autograd.GetSpecializedBackwardGraph(outputs, variables, ograds);
   
   //LOG(FATAL) << "Not Implemented.";
