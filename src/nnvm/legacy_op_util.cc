@@ -226,6 +226,12 @@ inline std::vector<NodeEntry> OpPropGradient(
   std::vector<NodeEntry> ograd(
       out_grads.begin(), out_grads.begin() + prop.ptr->NumVisibleOutputs());
   auto inputs = prop.ptr->BackwardInputs(ograd, in_data, out_data);
+  // TODO(minjie): Please double check following code.
+  //   Simply adding all auxiliary data to the inputs may not be
+  //   correct. For example, BatchNorm::Backward does not need
+  //   the auxiliary data. The extra dependencies might lead to
+  //   unexpected serialization of two concurrent executions, which
+  //   may harm performance in certain situation.
   // add all the auxiliary data
   for (uint32_t i = 0; i < prop.aux_states.size(); ++i) {
     inputs.emplace_back(ptr->inputs[i + prop.arguments.size()]);

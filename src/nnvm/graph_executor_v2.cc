@@ -744,6 +744,7 @@ void GraphExecutorV2::RunOpsInBulk(const vector<NDArray>& arguments,
   //   - Variables from the result arrays.
   //   - Temporary resources requested by each operator.
   //   - State variables used by each operator.
+  //   - TODO(minjie): mutable arguments.
   std::vector<Engine::VarHandle> use_vars, mutate_vars;
   for (const auto& nd : arguments) {
     use_vars.push_back(nd.var());
