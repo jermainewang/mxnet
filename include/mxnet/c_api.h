@@ -2019,6 +2019,8 @@ MXNET_DLL int MXGraphTransform(GraphHandle graph,
                                GraphHandle *out);
 MXNET_DLL int MXGraphTransformToOpCompatible(GraphHandle ghdl,
                                              mx_uint grad_order,
+                                             mx_uint num_reqs,
+                                             mx_uint *input_grad_reqs,
                                              GraphHandle *out);
 MXNET_DLL int MXGraphGetGlobalAttrJSON(GraphHandle graph,
                                        const char *key,

@@ -399,18 +399,26 @@ class HybridBlock(Block):
 
     # TODO(minjie): new api
     def _build_cache_new(self, *args):
-        inputs, out = self._get_graph(*args)
-        #self._cached_op = ndarray.CachedOp(out)
+        in_symbol, out_symbol = self._get_graph(*args)
         params = dict(self.collect_params().items())
-        self._cached_params = [params.get(name, None) for name in out.list_inputs()]
-        assert len(params) + len(self._cached_graph[0]) == len(out.list_inputs()), \
+        self._cached_params = [params.get(name, None) for name in out_symbol.list_inputs()]
+        assert len(params) + len(self._cached_graph[0]) == len(out_symbol.list_inputs()), \
             "Wrong number of inputs."
 
-        name2pos = {var.name: i for i, var in enumerate(inputs)}
-        self._in_idx = [(i, name2pos[name]) for i, name in enumerate(out.list_inputs())
+        name2pos = {var.name: i for i, var in enumerate(in_symbol)}
+        self._in_idx = [(i, name2pos[name]) for i, name in enumerate(out_symbol.list_inputs())
                         if name not in params]
 
-        grh = graph.create(out).transform_to_op_compatible(grad_order=1)
+        grh = graph.create(out_symbol)
+        # Transform to be compatible as (gradable) operator.
+        input_grad_reqs = []
+        for name in out_symbol.list_inputs():
+            if name not in params:
+                # Non-parameter input. Currently will always compute gradient for it.
+                input_grad_reqs.append('write')
+            else:
+                input_grad_reqs.append(params[name].grad_req)
+        grh = grh.transform_to_op_compatible(grad_order=1, input_grad_reqs=input_grad_reqs)
         grh.freeze()
         args, fmt = _flatten(args)
         assert fmt == self._in_format, "Invalid input format"

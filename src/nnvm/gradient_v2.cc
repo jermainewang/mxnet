@@ -528,24 +528,6 @@ Graph GradientRec(const Graph& fwd_graph,
                          &legacy_bwd2fwd);
   }
 
-  const auto& bwd_graph_idx = grad_g->indexed_graph();
-  for (uint32_t nid = 0; nid < bwd_graph_idx.num_nodes(); ++nid) {
-    const auto* node = bwd_graph_idx[nid].source;
-    //LOG(INFO) << "#" << nid << " " << node->attrs.name << " " << (node->is_variable()? "var" : node->op()->name);
-    //LOG(INFO) << bwd_graph_idx[nid].control_deps.size() << " v.s. " <<  node->control_deps.size();
-    CHECK_EQ(bwd_graph_idx[nid].control_deps.size(), node->control_deps.size());
-    //for (const auto& in : node->inputs) {
-      //LOG(INFO) << "\t<-" << in.node->attrs.name;
-    //}
-    //for (const auto& n : node->control_deps) {
-      //LOG(INFO) << "\t<c-" << n->attrs.name;
-      //if (!fwd_graph_idx.exist(n.get())) {
-        //LOG(FATAL) << "Found bwd2bwd control dep: " << n->attrs.name << " -> " << node->attrs.name;
-      //}
-    //}
-  }
-  //LOG(FATAL) << "!!!!";*/
-
   // Create new forward graph.
   Graph new_fwd_graph;
   NodeEntryMap<size_t> all_fwd_outputs;

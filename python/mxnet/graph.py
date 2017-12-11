@@ -11,7 +11,7 @@ from .base import _LIB
 from .base import check_call, c_array, c_str, mx_uint, py_str
 from .base import GraphHandle, GraphExecutorV2Handle, SymbolHandle, NDArrayHandle
 from .symbol import Symbol, Variable
-from .ndarray import NDArray
+from .ndarray import NDArray, _GRAD_REQ_MAP
 from .name import NameManager
 
 # Use different version of SymbolBase
@@ -128,11 +128,17 @@ class Graph(object):
             ctypes.byref(out)))
         return Graph(out)
 
-    def transform_to_op_compatible(self, grad_order=0):
+    def transform_to_op_compatible(self, grad_order=0, input_grad_reqs=None):
+        if input_grad_reqs is None and grad_order != 0:
+            raise TypeError('Gradient request types should be specified but None is provided.')
+        reqs_array = c_array(mx_uint, [mx_uint(_GRAD_REQ_MAP[req]) for req in input_grad_reqs])
+        num_reqs = mx_uint(0) if input_grad_reqs is None else mx_uint(len(input_grad_reqs))
         out = GraphHandle()
         check_call(_LIB.MXGraphTransformToOpCompatible(
             self._handle,
             mx_uint(grad_order),
+            num_reqs,
+            reqs_array,
             ctypes.byref(out)))
         return Graph(out)
 

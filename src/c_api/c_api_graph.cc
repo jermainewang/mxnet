@@ -222,10 +222,14 @@ int MXGraphTransform(GraphHandle graph,
 
 int MXGraphTransformToOpCompatible(GraphHandle ghdl,
                                    mx_uint grad_order,
+                                   mx_uint num_reqs,
+                                   mx_uint *input_grad_reqs,
                                    GraphHandle *out) {
   using nnvm::GraphPtr;
   using nnvm::Graph;
   using nnvm::any;
+  using pass::grad::MXGradientArgs;
+  using pass::MXEntryArg;
   GraphPtr* pp_out_graph = new GraphPtr();
   *pp_out_graph = Graph::Create();
   API_BEGIN();
@@ -235,7 +239,18 @@ int MXGraphTransformToOpCompatible(GraphHandle ghdl,
   std::unordered_map<std::string, std::shared_ptr<any>> kwargs_any;
   **pp_out_graph = nnvm::Transform(*pg, {"MXExposeInvisibleOutputs"}, kwargs_any);
   if (grad_order > 0) {
-    kwargs_any["mx_gradient_args"] = std::make_shared<any>(pass::grad::MXGradientArgs());
+    const auto& idx = (**pp_out_graph).indexed_graph();
+    CHECK_EQ(num_reqs, idx.input_nodes().size());
+    MXGradientArgs gradargs;
+    for (uint32_t i = 0; i < num_reqs; ++i) {
+      if (input_grad_reqs[i] != kNullOp) {
+        MXEntryArg entarg;
+        entarg.node = idx.input_nodes()[i];
+        entarg.index = 0;
+        gradargs.xs.emplace_back(std::move(entarg));
+      }
+    }
+    kwargs_any["mx_gradient_args"] = std::make_shared<any>(std::move(gradargs));
     **pp_out_graph = nnvm::Transform(**pp_out_graph, {"MXGradient"}, kwargs_any);
   }
   *out = pp_out_graph;
