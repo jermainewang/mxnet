@@ -37,6 +37,7 @@
 #include "./base.h"
 #include "./storage.h"
 #include "./engine.h"
+#include "./op_attr_types.h"
 #if MKL_EXPERIMENTAL == 1
 #include <mkl_memory.h>
 #endif
@@ -62,6 +63,10 @@ enum NDArrayStorageType {
   kCSRStorage,             // csr
 };
 
+namespace tape {
+typedef uint64_t TapeEntryId;
+static const TapeEntryId kNotTaped = 0;
+}  // namespace tape
 
 /*!
  * \brief ndarray interface
@@ -523,16 +528,16 @@ class NDArray {
   /*!
    * \brief Return a copy of this NDArray without autograd history
    */
-  NDArray Detach() const {
-    NDArray ret(*this);
-    ret.entry_ = nnvm::NodeEntry{nullptr, 0, 0};
-    return ret;
-  }
+  NDArray Detach() const;
+
+  void AttachGrad(OpReqType req_type, const NDArray& grad_buf);
+  bool HasGradAttached() const { return grad_req_type_ != kNullOp; }
+  std::pair<OpReqType, NDArray> GetAttachedGrad() const;
 
   nnvm::Symbol get_autograd_symbol() const;
   /*!
    * \brief Allocate the space if it is delayed allocated.
-   * This is an internal function used by system that normal user should not use
+   * This is an internal function used by system that normal user should not use.
    */
   inline void CheckAndAlloc() const {
     CHECK_EQ(storage_type(), kDefaultStorage);
@@ -574,6 +579,15 @@ class NDArray {
              << "CheckAndAllocAuxData is not intended for kDefaultStorage";
     ptr_->CheckAndAllocAuxData(i, aux_shape);
   }
+
+  tape::TapeEntryId tape_entry_id() const {
+    return tape_entry_id_;
+  }
+
+  void set_tape_entry_id(tape::TapeEntryId tid) {
+    tape_entry_id_ = tid;
+  }
+
   /*!
    * \brief Save list of ndarray into the Stream.x
    * \param fo The stream of output.
@@ -864,6 +878,15 @@ class NDArray {
   NDArrayStorageType storage_type_ = kUndefinedStorage;
   /*! \brief node entry for autograd */
   nnvm::NodeEntry entry_;
+
+#ifndef USE_LEGACY_AUTOGRAD
+  /*! \brief Unique id of this NDArray on the tape. Default value means not taped at all.*/
+  tape::TapeEntryId tape_entry_id_ = tape::kNotTaped;
+  // Used by attach_grad
+  OpReqType grad_req_type_ = kNullOp;
+  std::shared_ptr<Chunk> grad_buffer_{nullptr};
+#endif
+
   /*!
    * \brief internal TBlob
    * \note When user access tblob_ by some const methods like

@@ -32,13 +32,14 @@
 #include <functional>
 
 #include "./base.h"
-#include "./ndarray.h"
 #include "./engine.h"
 #include "./resource.h"
 
 namespace mxnet {
 
 using nnvm::NodeAttrs;
+
+class NDArray;
 
 /*! \brief operation request type to Forward and Backward */
 enum OpReqType {
@@ -261,6 +262,10 @@ using FInferStorageType = std::function<bool (const NodeAttrs& attrs,
                                               DispatchMode* dispatch_mode,
                                               std::vector<int>* in_attrs,
                                               std::vector<int>* out_attrs)>;
+
+using FBackwardDependency = std::function<void (const nnvm::Node* fwd_node,
+                                                std::vector<bool>* saved_inputs,
+                                                std::vector<bool>* saved_outputs)>;
 
 }  // namespace mxnet
 

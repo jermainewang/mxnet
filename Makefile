@@ -276,7 +276,7 @@ ifeq ($(USE_DIST_KVSTORE), 1)
 endif
 
 .PHONY: clean all extra-packages test lint docs clean_all rcpplint rcppexport roxygen\
-	cython2 cython3 cython cyclean
+	cython2 cython3 cython cyclean ycm
 
 all: lib/libmxnet.a lib/libmxnet.so $(BIN) extra-packages
 
@@ -453,6 +453,9 @@ cyclean:
 # R related shortcuts
 rcpplint:
 	python2 dmlc-core/scripts/lint.py mxnet-rcpp ${LINT_LANG} R-package/src
+
+ycm:
+	echo "$(CFLAGS)" > ycm.flags
 
 rpkg:
 	mkdir -p R-package/inst

@@ -29,6 +29,8 @@ from .. import name as _name
 from .parameter import Parameter, ParameterDict, DeferredInitializationError
 from .utils import _indent
 
+from .. import graph
+from ..graph import Graph
 
 class _BlockScope(object):
     """Scope for collecting child `Block` s."""
@@ -361,10 +363,9 @@ class HybridBlock(Block):
 
         return self._cached_graph
 
-    def _build_cache(self, *args):
+    def _build_cache_old(self, *args):
         inputs, out = self._get_graph(*args)
         self._cached_op = ndarray.CachedOp(out)
-
         params = dict(self.collect_params().items())
         self._cached_params = [params.get(name, None) for name in out.list_inputs()]
         assert len(params) + len(self._cached_graph[0]) == len(out.list_inputs()), \
@@ -374,7 +375,7 @@ class HybridBlock(Block):
         self._in_idx = [(i, name2pos[name]) for i, name in enumerate(out.list_inputs())
                         if name not in params]
 
-    def _call_cached_op(self, *args):
+    def _call_cached_op_old(self, *args):
         if self._cached_op is None:
             self._build_cache(*args)
 
@@ -395,6 +396,73 @@ class HybridBlock(Block):
         if isinstance(out, NDArray):
             out = [out]
         return _regroup(out, self._out_format)[0]
+
+    # TODO(minjie): new api
+    def _build_cache_new(self, *args):
+        in_symbol, out_symbol = self._get_graph(*args)
+        params = dict(self.collect_params().items())
+        self._cached_params = [params.get(name, None) for name in out_symbol.list_inputs()]
+        assert len(params) + len(self._cached_graph[0]) == len(out_symbol.list_inputs()), \
+            "Wrong number of inputs."
+
+        name2pos = {var.name: i for i, var in enumerate(in_symbol)}
+        self._in_idx = [(i, name2pos[name]) for i, name in enumerate(out_symbol.list_inputs())
+                        if name not in params]
+
+        grh = graph.create(out_symbol)
+        # Transform to be compatible as (gradable) operator.
+        input_grad_reqs = []
+        for name in out_symbol.list_inputs():
+            if name not in params:
+                # Non-parameter input. Currently will always compute gradient for it.
+                input_grad_reqs.append('write')
+            else:
+                input_grad_reqs.append(params[name].grad_req)
+        grh = grh.transform_to_op_compatible(grad_order=1, input_grad_reqs=input_grad_reqs)
+        grh.freeze()
+        args, fmt = _flatten(args)
+        assert fmt == self._in_format, "Invalid input format"
+        try:
+            cargs = [i.data() if i else None for i in self._cached_params]
+        except DeferredInitializationError:
+            cargs = [None] * len(self._cached_params)
+        for i, j in self._in_idx:
+            cargs[i] = args[j]
+        grh.specialize_by_ndarray(cargs)
+        self._cached_op = grh
+
+    # TODO(minjie): new api
+    def _call_cached_op_new(self, *args):
+        if self._cached_op is None:
+            self._build_cache(*args)
+
+        try:
+            cargs = [i.data() if i else None for i in self._cached_params]
+        except DeferredInitializationError:
+            self.infer_shape(*args)
+            for i in self._cached_params:
+                if i is not None:
+                    i._finish_deferred_init()
+            cargs = [i.data() if i else None for i in self._cached_params]
+
+        args, fmt = _flatten(args)
+        assert fmt == self._in_format, "Invalid input format"
+        for i, j in self._in_idx:
+            cargs[i] = args[j]
+        # TODO(minjie): is_training?
+        out = self._cached_op.eval(cargs)
+        #out = self._cached_op(*cargs)
+        if isinstance(out, NDArray):
+            out = [out]
+        return _regroup(out, self._out_format)[0]
+
+    def _call_cached_op(self, *args):
+        #return self._call_cached_op_old(*args)
+        return self._call_cached_op_new(*args)
+
+    def _build_cache(self, *args):
+        #self._build_cache_old(*args)
+        self._build_cache_new(*args)
 
     def _clear_cached_op(self):
         self._cached_graph = ()

@@ -35,6 +35,8 @@
 #include "./c_api_common.h"
 #include "../common/utils.h"
 #include "../common/exec_utils.h"
+#include "../imperative/taping.h"
+#include "../imperative/autograd.h"
 
 using namespace mxnet;
 
@@ -134,7 +136,10 @@ void MXImperativeInvokeImpl(AtomicSymbolCreator creator,
                             int num_params,
                             const char **param_keys,
                             const char **param_vals) {
-  const nnvm::Op* op = static_cast<nnvm::Op*>(creator);
+  using nnvm::Op;
+  using nnvm::Symbol;
+  using nnvm::Graph;
+  const Op* op = static_cast<nnvm::Op*>(creator);
   MXAPIThreadLocalEntry *ret = MXAPIThreadLocalStore::Get();
 
   nnvm::NodeAttrs attrs = ParseAttrs(op, num_inputs, num_params, param_keys, param_vals);
@@ -148,9 +153,23 @@ void MXImperativeInvokeImpl(AtomicSymbolCreator creator,
       num_outputs, infered_num_outputs, num_visible_outputs, outputs);
 
   auto state = Imperative::Get()->Invoke(Context::CPU(), attrs, ndinputs, ndoutputs);
+#ifdef USE_LEGACY_AUTOGRAD
   if (Imperative::Get()->is_recording()) {
     Imperative::Get()->RecordOp(std::move(attrs), ndinputs, ndoutputs, state);
   }
+#else
+  if (Imperative::Get()->is_recording()) {
+    // TODO(minjie): The functor type should be set in a more accurate way.
+    exec::FunctorInfo info;
+    if (state) {
+      info.type = exec::FunctorType::kForward;
+    } else {
+      info.type = exec::FunctorType::kFCompute;
+    }
+    info.state = state;
+    ag::AutogradTape::Get().Record(attrs, ndinputs, ndoutputs, std::move(info));
+  }
+#endif
 
   for (int i = *num_outputs; i < infered_num_outputs; ++i) delete ndoutputs[i];
 
@@ -201,6 +220,9 @@ int MXImperativeInvokeEx(AtomicSymbolCreator creator,
 
 int MXCreateCachedOp(SymbolHandle handle,
                      CachedOpHandle *out) {
+#ifndef USE_LEGACY_AUTOGRAD
+  LOG(FATAL) << "Cached op has been disabled.";
+#endif
   nnvm::Symbol* sym = static_cast<nnvm::Symbol*>(handle);
 
   API_BEGIN();
@@ -221,6 +243,10 @@ int MXInvokeCachedOp(CachedOpHandle handle,
                      NDArrayHandle *inputs,
                      int *num_outputs,
                      NDArrayHandle **outputs) {
+#ifndef USE_LEGACY_AUTOGRAD
+  LOG(FATAL) << "Cached op has been disabled.";
+#endif
+
   static const auto cached_op = nnvm::Op::Get("_CachedOp");
   MXAPIThreadLocalEntry *ret = MXAPIThreadLocalStore::Get();
 
@@ -275,6 +301,10 @@ int MXInvokeCachedOpEx(CachedOpHandle handle,
                        int *num_outputs,
                        NDArrayHandle **outputs,
                        const int **out_stypes) {  // outputs storage types
+#ifndef USE_LEGACY_AUTOGRAD
+  LOG(FATAL) << "Cached op has been disabled.";
+#endif
+
   MXAPIThreadLocalEntry *ret = MXAPIThreadLocalStore::Get();
   int err = MXInvokeCachedOp(handle, num_inputs, inputs, num_outputs, outputs);
   if (err != 0) return err;
@@ -313,11 +343,28 @@ int MXAutogradSetIsRecording(int is_recording, int* prev) {
   API_END();
 }
 
+int MXAutogradNewSession() {
+  API_BEGIN();
+#ifndef USE_LEGACY_AUTOGRAD
+  ag::AutogradTape::Get().NewSession();
+#endif
+  API_END();
+}
+
+int MXAutogradEndSession() {
+  API_BEGIN();
+#ifndef USE_LEGACY_AUTOGRAD
+  ag::AutogradTape::Get().EndSession();
+#endif
+  API_END();
+}
+
 int MXAutogradMarkVariables(mx_uint num_var,
                             NDArrayHandle *var_handles,
                             mx_uint *reqs_array,
                             NDArrayHandle *grad_handles) {
   API_BEGIN();
+#ifdef USE_LEGACY_AUTOGRAD
   std::vector<NDArray*> variables, gradients;
   std::vector<mx_uint> grad_reqs;
   variables.reserve(num_var);
@@ -329,6 +376,15 @@ int MXAutogradMarkVariables(mx_uint num_var,
     grad_reqs.emplace_back(reqs_array[i]);
   }
   Imperative::Get()->MarkVariables(variables, grad_reqs, gradients);
+#else
+  for (mx_uint i = 0; i < num_var; ++i) {
+    NDArray* var = static_cast<NDArray*>(var_handles[i]);
+    NDArray* grad = static_cast<NDArray*>(grad_handles[i]);
+    OpReqType req = static_cast<OpReqType>(reqs_array[i]);
+    var->AttachGrad(req, *grad);
+    ag::AutogradTape::Get().AttachGrad(var->tape_entry_id(), req, *grad);
+  }
+#endif
   API_END();
 }
 
@@ -359,7 +415,11 @@ int MXAutogradBackwardEx(mx_uint num_output,
   MXAPIThreadLocalEntry *ret = MXAPIThreadLocalStore::Get();
   API_BEGIN();
 
+#ifdef USE_LEGACY_AUTOGRAD
   std::vector<NDArray*> outputs, ograds, variables;
+#else
+  std::vector<const NDArray*> outputs, ograds, variables;
+#endif
   outputs.reserve(num_output);
   for (mx_uint i = 0; i < num_output; ++i) {
     outputs.emplace_back(reinterpret_cast<NDArray*>(output_handles[i]));
@@ -379,6 +439,7 @@ int MXAutogradBackwardEx(mx_uint num_output,
     variables.emplace_back(reinterpret_cast<NDArray*>(var_handles[i]));
   }
 
+#ifdef USE_LEGACY_AUTOGRAD
   auto grads = Imperative::Get()->Backward(outputs, ograds, variables, is_train,
                                                   retain_graph, create_graph);
   if (num_variables != 0) {
@@ -393,6 +454,25 @@ int MXAutogradBackwardEx(mx_uint num_output,
     *grad_handles = dmlc::BeginPtr(ret->ret_handles);
     *grad_stypes = dmlc::BeginPtr(ret->out_types);
   }
+#else
+  auto& autograd = ag::AutogradTape::Get();
+  autograd.GetSpecializedBackwardGraph(outputs, variables, ograds);
+  
+  //LOG(FATAL) << "Not Implemented.";
+
+  if (num_variables != 0) {
+    //ret->ret_handles.clear();
+    //ret->out_types.clear();
+    //ret->ret_handles.reserve(grads.size());
+    //ret->out_types.reserve(grads.size());
+    //for (const auto& i : grads) {
+      //ret->ret_handles.push_back(i);
+      //ret->out_types.push_back(i->storage_type());
+    //}
+    //*grad_handles = dmlc::BeginPtr(ret->ret_handles);
+    //*grad_stypes = dmlc::BeginPtr(ret->out_types);
+  }
+#endif
   API_END();
 }
 

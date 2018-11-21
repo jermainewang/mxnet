@@ -34,6 +34,7 @@
 #include "../common/utils.h"
 #include "../operator/tensor/matrix_op-inl.h"
 #include "../operator/tensor/init_op.h"
+#include "../imperative/autograd.h"
 
 #if MXNET_USE_OPENCV
 #include <opencv2/opencv.hpp>
@@ -46,6 +47,7 @@ DMLC_REGISTRY_ENABLE(::mxnet::NDArrayFunctionReg);
 namespace mxnet {
 
 NDArray NDArray::grad() const {
+#ifdef USE_LEGACY_AUTOGRAD
   if (Imperative::AGInfo::IsNone(*this)) return NDArray();
   Imperative::AGInfo& info = Imperative::AGInfo::Get(entry_.node);
   if (info.out_grads.size()) {
@@ -53,6 +55,24 @@ NDArray NDArray::grad() const {
     return info.out_grads[0];
   }
   return NDArray();
+#else
+  const auto& attached = GetAttachedGrad();
+  return attached.second;
+#endif
+}
+
+NDArray NDArray::Detach() const {
+#ifdef USE_LEGACY_AUTOGRAD
+  NDArray ret(*this);
+  ret.entry_ = nnvm::NodeEntry{nullptr, 0, 0};
+  return ret;
+#else
+  NDArray ret(*this);
+  ret.tape_entry_id_ = tape::kNotTaped;
+  ret.grad_req_type_ = kNullOp;
+  ret.grad_buffer_ = nullptr;
+  return ret;
+#endif
 }
 
 nnvm::Symbol NDArray::get_autograd_symbol() const {
@@ -90,7 +110,13 @@ NDArray NDArray::ReshapeWithRecord(const TShape &shape) {
   attrs.dict.insert({"shape", os.str()});
   attrs.op->attr_parser(&attrs);
   std::vector<NDArray*> inputs(1, this), outputs(1, &ret);
+#ifdef USE_LEGACY_AUTOGRAD
   Imperative::Get()->RecordOp(std::move(attrs), inputs, outputs);
+#else
+  exec::FunctorInfo info;
+  info.type = exec::FunctorType::kFCompute;
+  ag::AutogradTape::Get().Record(std::move(attrs), inputs, outputs, std::move(info));
+#endif
   return ret;
 }
 
@@ -121,7 +147,13 @@ NDArray NDArray::SliceWithRecord(index_t begin, index_t end) {
   attrs.dict.insert({"end", std::to_string(end)});
   attrs.op->attr_parser(&attrs);
   std::vector<NDArray*> inputs(1, this), outputs(1, &ret);
+#ifdef USE_LEGACY_AUTOGRAD
   Imperative::Get()->RecordOp(std::move(attrs), inputs, outputs);
+#else
+  exec::FunctorInfo info;
+  info.type = exec::FunctorType::kFCompute;
+  ag::AutogradTape::Get().Record(std::move(attrs), inputs, outputs, std::move(info));
+#endif
   return ret;
 }
 
@@ -167,17 +199,24 @@ NDArray NDArray::data_ndarray() const {
 }
 
 bool NDArray::fresh_out_grad() const {
+#ifdef USE_LEGACY_AUTOGRAD
   if (Imperative::AGInfo::IsNone(*this)) return false;
   Imperative::AGInfo& info = Imperative::AGInfo::Get(entry_.node);
   return info.fresh_out_grad;
+#else
+  return ag::AutogradTape::Get().HasTaped(tape_entry_id_);
+#endif
 }
 
 
 void NDArray::set_fresh_out_grad(bool state) const {
+#ifdef USE_LEGACY_AUTOGRAD
   CHECK(!Imperative::AGInfo::IsNone(*this))
     << "NDArray has not been marked as a variable and does not have gradient state";
   Imperative::AGInfo& info = Imperative::AGInfo::Get(entry_.node);
   info.fresh_out_grad = state;
+#else
+#endif
 }
 
 
@@ -822,6 +861,23 @@ static const uint32_t NDARRAY_V1_MAGIC = 0xF993fac8;
 
 /* magic number for ndarray version 2, with storage type */
 static const uint32_t NDARRAY_V2_MAGIC = 0xF993fac9;
+
+void NDArray::AttachGrad(OpReqType req_type, const NDArray& grad_buf) {
+  grad_req_type_ = req_type;
+  grad_buffer_ = grad_buf.ptr_;
+}
+
+std::pair<OpReqType, NDArray> NDArray::GetAttachedGrad() const {
+  NDArray grad_buf;
+  grad_buf.shape_ = shape_;
+  grad_buf.dtype_ = dtype_;
+  grad_buf.storage_type_ = storage_type_;
+#if MKL_EXPERIMENTAL == 1
+  grad_buf.Mkl_mem_ = Mkl_mem_;
+#endif
+  grad_buf.ptr_ = grad_buffer_;
+  return std::make_pair(grad_req_type_, grad_buf);
+}
 
 void NDArray::Save(dmlc::Stream *strm) const {
   // write magic number to mark this version

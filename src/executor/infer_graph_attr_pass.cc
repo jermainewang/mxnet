@@ -438,6 +438,15 @@ nnvm::Graph InferStorageType(nnvm::Graph&& graph,
       [](const int t) { return t == -1; },
       DefaultStorageType, false, "dispatch_mode", DispatchMode::kVariable);
 
+  // TODO(minjie): hack
+  auto stypes = ret.GetAttr<StorageTypeVector>("storage_type");
+  for (size_t i = 0; i < stypes.size(); ++i) {
+    //LOG(INFO) << "Ent#" << i << "stypes=" << stypes[i];
+    stypes[i] = kDefaultStorage;
+  }
+  ret.attrs["storage_type"] = std::make_shared<any>(std::move(stypes));
+  ret.attrs["storage_type_num_unknown_nodes"] = std::make_shared<any>((size_t)0);
+
   // log the storage types and dispatch modes of the graph
   bool log_verbose = dmlc::GetEnv("MXNET_INFER_STORAGE_TYPE_VERBOSE_LOGGING", false);
   if (log_verbose) {

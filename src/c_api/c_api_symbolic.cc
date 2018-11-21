@@ -23,18 +23,22 @@
  */
 #include <mxnet/base.h>
 #include <mxnet/c_api.h>
+#include <mxnet/ndarray.h>
 #include <nnvm/c_api.h>
+#include <nnvm/graph.h>
 #include <nnvm/pass.h>
 #include <nnvm/pass_functions.h>
 #include <nnvm/symbolic.h>
 #include "./c_api_common.h"
 #include "../operator/operator_common.h"
+#include "../nnvm/graph_executor_v2.h"
 #include "../executor/exec_pass.h"
 
 namespace mxnet {
 namespace op {
 void RegisterLegacyOpProp();
 void RegisterLegacyNDFunc();
+void PrepareAllOps();
 }
 const std::vector<std::string> kHiddenKeys = {
   "ctx_group", "lr_mult", "wd_mult", "force_mirroring", "mirror_stage"
@@ -68,12 +72,41 @@ std::vector<uint32_t> ReadOnlyArgIndices(const nnvm::IndexedGraph& idx) {
 
 }  // namespace mxnet
 
+std::unordered_map<std::string, std::string>
+_ExtractSymbolKWArgs(mx_uint num_param,
+                     const char** keys,
+                     const char** vals) {
+  std::unordered_map<std::string, std::string> kwargs;
+  for (nn_uint i = 0; i < num_param; ++i) {
+    bool flag = false;
+    for (const auto &k : kHiddenKeys) {
+      std::string tmp(keys[i]);
+      size_t pos = tmp.rfind(k);
+      if (pos == 0) {
+        kwargs.insert({"__" + tmp + "__", std::string(vals[i])});
+        flag = true;
+        break;
+      } else if (pos != std::string::npos && pos == tmp.length() - k.length()) {
+        std::ostringstream os;
+        os << "setting variable attributes with " << keys[i] << " is deprecated. "
+           << "please instead use\nw = Variable(" << k << "=" << vals[i] << ")\n"
+           << "sym = YourSymbolName(" << tmp.substr(0, pos-1) << "=w)";
+        throw dmlc::Error(os.str());
+      }
+    }
+    if (!flag)
+      kwargs.insert({std::string(keys[i]), std::string(vals[i])});
+  }
+  return kwargs;
+}
+
 // symbolic configuration generation API.
 // Redirect to NNVM's C API
 int MXListAllOpNames(nn_uint *out_size,
                      const char ***out_array) {
   mxnet::op::RegisterLegacyOpProp();
   mxnet::op::RegisterLegacyNDFunc();
+  mxnet::op::PrepareAllOps();
   return NNListAllOpNames(out_size, out_array);
 }
 
@@ -81,6 +114,7 @@ int MXSymbolListAtomicSymbolCreators(mx_uint *out_size,
                                      AtomicSymbolCreator **out_array) {
   mxnet::op::RegisterLegacyOpProp();
   mxnet::op::RegisterLegacyNDFunc();
+  mxnet::op::PrepareAllOps();
   return NNListUniqueOps(out_size, out_array);
 }
 
@@ -117,28 +151,7 @@ int MXSymbolCreateAtomicSymbol(AtomicSymbolCreator creator,
   nnvm::Symbol *s = new nnvm::Symbol();
   API_BEGIN();
   const nnvm::Op* op = static_cast<const nnvm::Op*>(creator);
-  std::unordered_map<std::string, std::string> kwargs;
-  for (nn_uint i = 0; i < num_param; ++i) {
-    bool flag = false;
-    for (const auto &k : kHiddenKeys) {
-      std::string tmp(keys[i]);
-      size_t pos = tmp.rfind(k);
-      if (pos == 0) {
-        kwargs.insert({"__" + tmp + "__", std::string(vals[i])});
-        flag = true;
-        break;
-      } else if (pos != std::string::npos && pos == tmp.length() - k.length()) {
-        std::ostringstream os;
-        os << "setting variable attributes with " << keys[i] << " is deprecated. "
-           << "please instead use\nw = Variable(" << k << "=" << vals[i] << ")\n"
-           << "sym = YourSymbolName(" << tmp.substr(0, pos-1) << "=w)";
-        throw dmlc::Error(os.str());
-      }
-    }
-    if (!flag)
-      kwargs.insert({std::string(keys[i]), std::string(vals[i])});
-  }
-  *s = nnvm::Symbol::CreateFunctor(op, std::move(kwargs));
+  *s = nnvm::Symbol::CreateFunctor(op, _ExtractSymbolKWArgs(num_param, keys, vals));
   *out = s;
   API_END_HANDLE_ERROR(delete s;);
 }
@@ -565,3 +578,4 @@ int MXSymbolGrad(SymbolHandle sym, mx_uint num_wrt, const char** wrt, SymbolHand
   LOG(FATAL) << "not implemented";
   API_END();
 }
+

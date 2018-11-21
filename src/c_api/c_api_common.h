@@ -138,4 +138,9 @@ inline void CopyAttr(const nnvm::IndexedGraph& idx,
 extern const std::vector<std::string> kHiddenKeys;
 }  // namespace mxnet
 
+extern std::unordered_map<std::string, std::string>
+_ExtractSymbolKWArgs(mx_uint num_param, const char** keys, const char** vals);
+
+extern void _SpecializeByNDArrays(nnvm::Graph* graph, int num_arrays, NDArrayHandle *arrays);
+
 #endif  // MXNET_C_API_C_API_COMMON_H_

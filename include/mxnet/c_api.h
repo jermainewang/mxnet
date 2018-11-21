@@ -700,6 +700,8 @@ MXNET_DLL int MXImperativeInvokeEx(AtomicSymbolCreator creator,
  * \return 0 when success, -1 when failure happens
  */
 MXNET_DLL int MXAutogradSetIsRecording(int is_recording, int* prev);
+MXNET_DLL int MXAutogradNewSession();
+MXNET_DLL int MXAutogradEndSession();
 /*!
  * \brief set whether to record operator for autograd
  * \param is_training 1 when training, 0 when testing
@@ -884,6 +886,7 @@ MXNET_DLL int MXSymbolCreateAtomicSymbol(AtomicSymbolCreator creator,
                                          const char **keys,
                                          const char **vals,
                                          SymbolHandle *out);
+
 /*!
  * \brief Create a Variable Symbol.
  * \param name name of the variable
@@ -1994,6 +1997,71 @@ MXNET_DLL int MXRtcCudaKernelCall(CudaKernelHandle handle, int dev_id, void** ar
                                   mx_uint grid_dim_z, mx_uint block_dim_x,
                                   mx_uint block_dim_y, mx_uint block_dim_z,
                                   mx_uint shared_mem);
+
+/////////////// Subgraph APIs
+typedef void *GraphHandle;
+typedef void *GraphExecutorV2Handle;
+MXNET_DLL int MXGraphCreate(SymbolHandle symbol, GraphHandle *out);
+MXNET_DLL int MXGraphFree(GraphHandle graph);
+MXNET_DLL int MXGraphSpecialize(GraphHandle graph,
+                                mx_uint num_param,
+                                const char **keys,
+                                const char **vals);
+MXNET_DLL int MXGraphSpecializeByNDArrays(GraphHandle graph,
+                                          int num_arrays,
+                                          NDArrayHandle *arrays);
+MXNET_DLL int MXGraphTransform(GraphHandle graph,
+                               mx_uint num_passes,
+                               const char **passes,
+                               mx_uint num_param,
+                               const char **keys,
+                               const char **vals,
+                               GraphHandle *out);
+MXNET_DLL int MXGraphTransformToOpCompatible(GraphHandle ghdl,
+                                             mx_uint grad_order,
+                                             mx_uint num_reqs,
+                                             mx_uint *input_grad_reqs,
+                                             GraphHandle *out);
+MXNET_DLL int MXGraphGetGlobalAttrJSON(GraphHandle graph,
+                                       const char *key,
+                                       const char **out);
+MXNET_DLL int MXGraphGetNodeAttrJSON(GraphHandle graph,
+                                     const char *key,
+                                     const char **out);
+MXNET_DLL int MXGraphGetNodeEntryAttrJSON(GraphHandle graph,
+                                          const char *key,
+                                          const char **out);
+MXNET_DLL int MXGraphCreateInputArrays(GraphHandle graph,
+                                       int *num_inputs,
+                                       NDArrayHandle **in_arrays);
+MXNET_DLL int MXGraphCreateOutputArrays(GraphHandle graph,
+                                        int *num_outputs,
+                                        NDArrayHandle **out_arrays);
+MXNET_DLL int MXGraphEval(GraphHandle ghdl,
+                          int num_inputs,
+                          NDArrayHandle *inputs,
+                          int *num_outputs,
+                          mx_uint *out_req_type,
+                          NDArrayHandle **outputs,
+                          int is_training);
+MXNET_DLL int MXSymbolCreateGraphSymbol(GraphHandle graph,
+                                        mx_uint num_param,
+                                        const char **keys,
+                                        const char **vals,
+                                        SymbolHandle *out);
+MXNET_DLL int MXExecV2Create(GraphHandle graph,
+                             int dynamic_allocation,
+                             int zero_copy,
+                             GraphExecutorV2Handle *out);
+MXNET_DLL int MXExecV2Run(GraphExecutorV2Handle ehdl,
+                          int num_inputs,
+                          NDArrayHandle *inputs,
+                          int *num_outputs,
+                          mx_uint *out_req_type,
+                          NDArrayHandle **outputs,
+                          int is_training);
+/////////////// Subgraph APIs
+
 
 #ifdef __cplusplus
 }

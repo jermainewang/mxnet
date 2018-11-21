@@ -162,76 +162,56 @@ loss = gluon.loss.SoftmaxCrossEntropyLoss()
 netG.initialize(mx.init.Normal(0.02), ctx=ctx)
 netD.initialize(mx.init.Normal(0.02), ctx=ctx)
 
-# trainer for the generator and the discriminator
-trainerG = gluon.Trainer(netG.collect_params(), 'adam', {'learning_rate': opt.lr, 'beta1': opt.beta1})
-trainerD = gluon.Trainer(netD.collect_params(), 'adam', {'learning_rate': opt.lr, 'beta1': opt.beta1})
-
 # ============printing==============
 real_label = mx.nd.ones((opt.batch_size,), ctx=ctx)
 fake_label = mx.nd.zeros((opt.batch_size,), ctx=ctx)
+data = mx.nd.zeros((opt.batch_size, nc, 64, 64), ctx=ctx)
+noise = mx.nd.random.normal(0, 1, shape=(opt.batch_size, nz, 1, 1), ctx=ctx)
 
-metric = mx.metric.Accuracy()
 print('Training... ')
-stamp =  datetime.now().strftime('%Y_%m_%d-%H_%M')
 
-iter = 0
-for epoch in range(opt.nepoch):
-    tic = time.time()
+timing = []
+for i in range(50):
     btic = time.time()
-    for data, _ in train_data:
-        # train with real_t
-        data = data.as_in_context(ctx)
-        noise = mx.nd.random.normal(0, 1, shape=(opt.batch_size, nz, 1, 1), ctx=ctx)
+    ############################
+    # (1) Update D network: maximize log(D(x)) + log(1 - D(G(z)))
+    ###########################
+    with autograd.record():
+        output = netD(data)
+        output = output.reshape((opt.batch_size, 2))
+        errD_real = loss(output, real_label)
 
-        with autograd.record():
-            output = netD(data)
-            output = output.reshape((opt.batch_size, 2))
-            errD_real = loss(output, real_label)
-            metric.update([real_label,], [output,])
+        fake = netG(noise)
+        output = netD(fake.detach())
+        output = output.reshape((opt.batch_size, 2))
+        errD_fake = loss(output, fake_label)
+        errD = errD_real + errD_fake
+        errD.backward()
+        #errD.wait_to_read()
 
-            fake = netG(noise)
-            output = netD(fake.detach())
-            output = output.reshape((opt.batch_size, 2))
-            errD_fake = loss(output, fake_label)
-            errD = errD_real + errD_fake
-            errD.backward()
-            metric.update([fake_label,], [output,])
+    for k, v in netD.collect_params().items():
+        if v._grad is not None:
+            v.grad().wait_to_read()
 
-            ############################
-            # (1) Update D network: maximize log(D(x)) + log(1 - D(G(z)))
-            ###########################
-            with autograd.pause():
-                trainerD.step(opt.batch_size)
+    ############################
+    # (2) Update G network: maximize log(D(G(z)))
+    ###########################
+    with autograd.record():
+        output = netD(fake)
+        output = output.reshape((-1, 2))
+        errG = loss(output, real_label)
+        errG.backward()
+        #errG.wait_to_read()
 
-            output = netD(fake)
-            output = output.reshape((-1, 2))
-            errG = loss(output, real_label)
-            errG.backward()
+    for k, v in netG.collect_params().items():
+        if v._grad is not None:
+            v.grad().wait_to_read()
 
-            ############################
-            # (2) Update G network: maximize log(D(G(z)))
-            ###########################
-            with autograd.pause():
-                trainerG.step(opt.batch_size)
+    t = time.time() - btic
+    logging.info('time: {} speed: {} samples/s'.format(
+      t, opt.batch_size / t))
 
-        name, acc = metric.get()
-        # logging.info('speed: {} samples/s'.format(opt.batch_size / (time.time() - btic)))
-        logging.info('discriminator loss = %f, generator loss = %f, binary training acc = %f at iter %d epoch %d' %(mx.nd.mean(errD).asscalar(), mx.nd.mean(errG).asscalar(), acc, iter, epoch))
-        if iter % 1 == 0:
-            visual('gout', fake.asnumpy(), name=os.path.join(outf,'fake_img_iter_%d.png' %iter))
-            visual('data', data.asnumpy(), name=os.path.join(outf,'real_img_iter_%d.png' %iter))
+    if i > 5:
+        timing.append(t)
 
-        iter = iter + 1
-        btic = time.time()
-
-    name, acc = metric.get()
-    metric.reset()
-    logging.info('\nbinary training acc at epoch %d: %s=%f' % (epoch, name, acc))
-    logging.info('time: %f' % (time.time() - tic))
-
-    if check_point:
-        netG.save_params(os.path.join(outf,'generator_epoch_%d.params' %epoch))
-        netD.save_params(os.path.join(outf,'discriminator_epoch_%d.params' % epoch))
-
-netG.save_params(os.path.join(outf, 'generator.params'))
-netD.save_params(os.path.join(outf, 'discriminator.params'))
+print('average {} (s)'.format(np.mean(timing)))

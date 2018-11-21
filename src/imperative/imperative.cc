@@ -219,9 +219,8 @@ void Imperative::RecordOp(
   } else {
     node->inputs.resize(inputs.size());
   }
-
-  std::vector<bool>& save_inputs = *p_save_inputs;
-  std::vector<bool>& save_outputs = *p_save_outputs;
+  const std::vector<bool>& save_inputs = *p_save_inputs;
+  const std::vector<bool>& save_outputs = *p_save_outputs;
 
   for (size_t i = 0; i < inputs.size(); ++i) {
     if (AGInfo::IsNone(*(inputs[i]))) {

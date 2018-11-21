@@ -128,6 +128,9 @@ RecordIOHandle = ctypes.c_void_p
 RtcHandle = ctypes.c_void_p
 CudaModuleHandle = ctypes.c_void_p
 CudaKernelHandle = ctypes.c_void_p
+
+GraphHandle = ctypes.c_void_p
+GraphExecutorV2Handle = ctypes.c_void_p
 #----------------------------
 # helper function definition
 #----------------------------

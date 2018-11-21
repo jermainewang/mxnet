@@ -179,6 +179,9 @@ for epoch in range(opt.nepoch):
     tic = time.time()
     btic = time.time()
     for data, _ in train_data:
+        ############################
+        # (1) Update D network: maximize log(D(x)) + log(1 - D(G(z)))
+        ###########################
         # train with real_t
         data = data.as_in_context(ctx)
         noise = mx.nd.random.normal(0, 1, shape=(opt.batch_size, nz, 1, 1), ctx=ctx)
@@ -197,22 +200,18 @@ for epoch in range(opt.nepoch):
             errD.backward()
             metric.update([fake_label,], [output,])
 
-            ############################
-            # (1) Update D network: maximize log(D(x)) + log(1 - D(G(z)))
-            ###########################
-            with autograd.pause():
-                trainerD.step(opt.batch_size)
+        trainerD.step(opt.batch_size)
 
+        ############################
+        # (2) Update G network: maximize log(D(G(z)))
+        ###########################
+        with autograd.record():
             output = netD(fake)
             output = output.reshape((-1, 2))
             errG = loss(output, real_label)
             errG.backward()
 
-            ############################
-            # (2) Update G network: maximize log(D(G(z)))
-            ###########################
-            with autograd.pause():
-                trainerG.step(opt.batch_size)
+        trainerG.step(opt.batch_size)
 
         name, acc = metric.get()
         # logging.info('speed: {} samples/s'.format(opt.batch_size / (time.time() - btic)))
